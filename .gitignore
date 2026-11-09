@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+data/reports/*
+data/extracted/*
+data/output/*
+data/*.sqlite
+!data/**/.gitkeep
+.env

@@ -1,0 +1,9 @@
+# Scoring rubric has NOT been supplied yet. Empty thresholds => scores stay PENDING_RUBRIC.
+# threshold item: {min, max, min_inclusive, max_inclusive, points}   (null = unbounded)
+rubric_status: PENDING
+missing_data_policy: no_score     # no_score | (future) explicit points
+overall: {method: weighted_sum}
+metrics:
+  independent_director_ratio: {direction: null, weight: 1.0, thresholds: []}
+  zero_ownership_bks_ratio:   {direction: null, weight: 1.0, thresholds: []}
+  board_ownership_ratio:      {direction: null, weight: 1.0, thresholds: []}

@@ -1,0 +1,45 @@
+# Research methodology. Every date/source rule is an explicit parameter (spec section 4).
+years: {start: 2018, end: 2025}
+
+measurement:
+  # report_disclosed: use the composition date the Annual Report itself discloses.
+  # fiscal_year_end:  force 31 Dec of the fiscal year (observations on other dates are flagged).
+  membership_date_policy: report_disclosed
+  ownership_date_policy: report_disclosed
+  # Reporting-year attribution: observations belong to the fiscal year of the report that contains them.
+  attribute_to: report_fiscal_year
+  # Dates after fiscal-year end are kept (never replaced by 31 Dec, never reassigned).
+  allow_post_year_end: true
+  # An effective date this many years away from the fiscal year is flagged for review.
+  max_year_gap: 1
+  subsequent_event_keywords: ["sự kiện sau ngày kết thúc", "sau ngày kết thúc năm tài chính", "subsequent event"]
+
+independence:
+  # Per-member independence stays UNKNOWN unless explicitly stated. If True, a board whose every
+  # listed member has a reported title is treated as complete for Indicator 1 (members whose title
+  # does not say "độc lập" are counted as non-independent in the denominator only).
+  unstated_as_non_independent_when_titles_listed: true
+
+ownership:
+  # Indicator 3 source selection:
+  #   individual_sum_preferred | aggregate_preferred | individual_sum_only | aggregate_only
+  board_source_policy: individual_sum_preferred
+  aggregate_tolerance_pp: 0.05      # percentage points tolerated between aggregate and sum
+  derive_pct_from_shares: false     # NOT implemented; must stay false (spec: no automatic derivation)
+  dash_means_missing: true          # "-" in an ownership cell is NOT zero
+
+outstanding_shares:
+  approved_sources: [VIETSTOCK, EXCHANGE, COMPANY, MANUAL_APPROVED]
+  holidays: []                      # ISO dates the exchange was closed (extends weekend logic)
+  csv_path: reviewed/outstanding_shares.csv
+
+sources:
+  vietstock_base: https://finance.vietstock.vn
+  manual_sources_csv: reviewed/report_sources.csv   # ticker,year,url,source_category,publication_date
+  inbox_dir: reports/inbox                           # drop PDFs as TICKER_YEAR.pdf
+  http: {timeout_s: 30, retries: 3, backoff_s: 2.0, min_interval_s: 1.5, max_bytes: 209715200}
+
+extraction:
+  scanned_chars_per_page_threshold: 80
+  relevant_page_limit: 40
+  llm_enabled: false

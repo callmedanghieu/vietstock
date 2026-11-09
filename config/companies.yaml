@@ -1,0 +1,5 @@
+# Seed registry (name/exchange hints used for PDF identity checks). Extend as needed.
+# History entries support ticker changes / exchange migrations / renames.
+FPT: {name: "Công ty Cổ phần FPT", aliases: ["FPT Corporation", "Tập đoàn FPT"], exchange: HOSE}
+HPG: {name: "Công ty Cổ phần Tập đoàn Hòa Phát", aliases: ["Hoa Phat Group", "Hòa Phát"], exchange: HOSE}
+VNM: {name: "Công ty Cổ phần Sữa Việt Nam", aliases: ["Vinamilk"], exchange: HOSE}
