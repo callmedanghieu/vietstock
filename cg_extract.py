@@ -113,7 +113,7 @@ Dưới đây là text của các trang liên quan (mỗi trang bắt đầu b�
 Lấy số liệu tại thời điểm CUỐI NĂM báo cáo; người đã miễn nhiệm trong năm không tính.
 
 Quy tắc:
-- TV độc lập HĐQT: chỉ đếm người được ghi rõ "độc lập"; "không điều hành" mà không ghi "độc lập" thì KHÔNG đếm.
+- TV độc lập HĐQT: đếm người được ghi rõ "độc lập" ở BẤT KỲ chỗ nào trong các trang (tiêu đề bio, bảng HĐQT, danh sách trong BCTC, nghị quyết). "Không điều hành" mà không ghi "độc lập" thì KHÔNG đếm. Nếu báo cáo nêu rõ số lượng (ví dụ "02 thành viên độc lập", "02/04 thành viên là độc lập") thì ưu tiên số đó và nêu tên những người xác định được.
 - TV BKS sở hữu 0%: thành viên Ban kiểm soát có số cổ phần = 0 hoặc tỷ lệ 0%/0,00%. Công ty mô hình 1 tầng (không có BKS) → bks_total = null.
 - Tổng % sở hữu HĐQT: cộng tỷ lệ sở hữu CÁ NHÂN của các thành viên HĐQT cuối năm (không cộng phần đại diện cho tổ chức). Không tìm được → null.
 - Không đoán. Thiếu thì để null và nói rõ trong "note".
@@ -197,6 +197,15 @@ def mode_api(in_dir: Path, out_xlsx: Path):
         ined = round(bi / bt, 4) if bt and bi is not None else "N/A"
         pbks = round(kz / kt, 4) if kt and kz is not None else "N/A"
         own = d.get("board_own_pct")
+        # Tự cộng tỷ lệ sở hữu cá nhân HĐQT từ danh sách thành viên (tin cậy hơn số model điền)
+        mem = [m for m in d.get("members", []) if m.get("body") == "HDQT"]
+        if mem and all(m.get("own_pct") is not None for m in mem):
+            own_calc = round(sum(float(m["own_pct"]) for m in mem), 4)
+            if own is None or abs(own_calc - float(own)) > 0.01:
+                d["note"] = f"[Tổng SH HĐQT tính lại từ danh sách TV = {own_calc}% (model điền {own})] " + (d.get("note") or "")
+            own = own_calc
+        if mem and bt is not None and len(mem) != bt:
+            d["note"] = f"[Số TV HĐQT trong danh sách ({len(mem)}) khác board_total ({bt}) – kiểm tra] " + (d.get("note") or "")
         ws.append([code, year, bt if bt is not None else "N/A", bi if bi is not None else "N/A", ined,
                    kt if kt is not None else "N/A", kz if kz is not None else "N/A", pbks,
                    round(own / 100, 4) if own is not None else "N/A", d.get("own_date") or "",
