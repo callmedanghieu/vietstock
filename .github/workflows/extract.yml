@@ -44,6 +44,9 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Cài thư viện Python
+        run: pip install -r requirements.txt
+
       - name: Lập danh sách file của shard
         env:
           GH_TOKEN: ${{ github.token }}
@@ -58,13 +61,10 @@ jobs:
           fi
           echo "File thuộc shard này: $(wc -l < plan.tsv)"
 
-      - name: Cài OCR và thư viện (chỉ khi shard có file)
+      - name: Cài OCR (chỉ khi shard có file)
         run: |
           if [ -s plan.tsv ]; then
             sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-vie
-            pip install -r requirements.txt
-          else
-            pip install -q openpyxl
           fi
 
       - name: Tải / chép file về thư mục làm việc
