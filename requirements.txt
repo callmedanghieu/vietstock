@@ -1,0 +1,6 @@
+pdfplumber
+pypdf
+openpyxl
+anthropic
+pdf2image
+pytesseract
