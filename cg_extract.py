@@ -295,7 +295,7 @@ def normalize(d: dict) -> dict:
 
 def call_claude(text: str) -> dict:
     import anthropic
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(max_retries=6)
     msg = client.messages.create(
         model=os.environ.get("CG_MODEL", "claude-haiku-5-5"),
         max_tokens=8000,
@@ -489,8 +489,9 @@ def mode_api(in_dirs, out_xlsx: Path):
     else:
         wb = Workbook(); ws = wb.active; ws.title = "CG_data"; ws.append(HDR)
     wm = wb["Thanh_vien"] if "Thanh_vien" in wb.sheetnames else wb.create_sheet("Thanh_vien")
-    if wm.max_row < 1 or wm.cell(1, 1).value != MHDR[0]:
-        wm.append(MHDR)
+    if wm["A1"].value != MHDR[0]:
+        for j, h in enumerate(MHDR, 1):          # ghi thẳng vào dòng 1 (append sẽ để trống dòng 1)
+            wm.cell(1, j, h)
     rows = list(ws.iter_rows(min_row=2, values_only=True))
     done = {r[13] for r in rows}
     seen = {(r[0], r[1]) for r in rows}

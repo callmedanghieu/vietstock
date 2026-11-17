@@ -7,50 +7,122 @@ on:
     paths:
       - "bctn/**"             # Cách phụ (đợt nhỏ): upload PDF vào thư mục bctn/
       - "cg_extract.py"
+      - "cg_tools.py"
   workflow_dispatch:          # Nút "Run workflow" thủ công
+    inputs:
+      tag:
+        description: "Tag của Release cần xử lý lại (để trống = xử lý thư mục bctn/)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
 
 concurrency:
   group: extract
-  cancel-in-progress: false   # đợt sau xếp hàng chờ đợt trước, không chạy chồng
+  cancel-in-progress: false   # đợt sau xếp hàng chờ đợt trước (GitHub chỉ giữ 1 đợt chờ — đừng publish liên tiếp)
+
+env:
+  TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+  NSHARDS: 8                  # số máy chạy song song; nếu đổi, sửa cả danh sách matrix.shard bên dưới
 
 jobs:
   extract:
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main           # luôn lấy ket_qua.xlsx mới nhất
+          ref: main           # lấy ket_qua.xlsx mới nhất để biết file nào đã xử lý
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Lập danh sách file của shard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$TAG" ]; then
+            RID=$(gh api "repos/${{ github.repository }}/releases/tags/$TAG" --jq .id)
+            gh api --paginate "repos/${{ github.repository }}/releases/$RID/assets?per_page=100" --jq '.[] | {id,name}' > assets.jsonl
+            echo "Release $TAG: $(wc -l < assets.jsonl) file đính kèm"
+            python cg_tools.py plan --assets assets.jsonl --done ket_qua.xlsx --shard ${{ matrix.shard }} --n $NSHARDS > plan.tsv
+          else
+            python cg_tools.py plan --dir bctn --done ket_qua.xlsx --shard ${{ matrix.shard }} --n $NSHARDS > plan.tsv
+          fi
+          echo "File thuộc shard này: $(wc -l < plan.tsv)"
+
+      - name: Cài OCR và thư viện (chỉ khi shard có file)
+        run: |
+          if [ -s plan.tsv ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-vie
+            pip install -r requirements.txt
+          else
+            pip install -q openpyxl
+          fi
+
+      - name: Tải / chép file về thư mục làm việc
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p work
+          while IFS=$'\t' read -r id name; do
+            [ -z "$name" ] && continue
+            if [ "$id" = "-" ]; then
+              cp "bctn/$name" "work/$name"
+            else
+              gh api -H "Accept: application/octet-stream" "repos/${{ github.repository }}/releases/assets/$id" > "work/$name" \
+                || gh release download "$TAG" --pattern "$name" -D work --clobber
+            fi
+          done < plan.tsv
+          ls work | wc -l
+
+      - name: Chạy trích dữ liệu
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python cg_extract.py api --in work --out shard_${{ matrix.shard }}.xlsx
+
+      - name: Lưu kết quả của shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.shard }}
+          path: shard_${{ matrix.shard }}.xlsx
+          if-no-files-found: ignore
+          retention-days: 3
+
+  merge:
+    needs: extract
+    if: always() && needs.extract.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Cài OCR (cho file scan)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-vie
+      - run: pip install -q openpyxl
 
-      - name: Cài thư viện Python
-        run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          path: shards
+          merge-multiple: true
+        continue-on-error: true
 
-      - name: Tải PDF đính kèm trong Release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p bctn_release
-          gh release download "${{ github.event.release.tag_name }}" --pattern "*.pdf" --pattern "*.PDF" -D bctn_release || true
-          echo "Số file tải về: $(ls bctn_release | wc -l)"
-
-      - name: Chạy trích dữ liệu
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python cg_extract.py api --in bctn bctn_release --out ket_qua.xlsx
+      - name: Gộp kết quả vào ket_qua.xlsx
+        run: python cg_tools.py merge --target ket_qua.xlsx --inputs shards/*.xlsx
 
       - name: Commit kết quả về repo
-        if: always()          # lưu kết quả kể cả khi bước trên lỗi/hết giờ giữa chừng
         run: |
           git config user.name "cg-bot"
           git config user.email "cg-bot@users.noreply.github.com"
