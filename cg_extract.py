@@ -112,7 +112,6 @@ RE_TICKERS = [
     (re.compile(r"\b" + TK + r"\s*[-–:]?\s*" + LABEL), 3),
     (re.compile(LABEL + r"\s*:?[ \t]*\n[^\n]*?\b" + TK + r"[ \t]*$", re.M), 3),
     (re.compile(r"(?i:phat\s*hanh)\s*\(\s*" + TK + r"\s*\)"), 2),
-    (re.compile(r"(?i:co\s*phieu)\s+" + TK + r"\b"), 1),
 ]
 RE_YEAR = re.compile(r"(?i)(?:bao\s*cao\s*thuong\s*nien|annual\s*report)[^0-9]{0,80}?(20[0-3]\d)\b")
 NOT_TICKER = {"HNX", "HSX", "HOS", "UPC", "OTC", "ETF", "VND", "USD", "EUR", "JPY", "CTC", "CEO", "CFO", "COO",
@@ -135,6 +134,8 @@ def detect_identity(texts):
         for m in RE_YEAR.finditer(f):
             year[int(m.group(1))] += 1
     code_d, code_score = (tick.most_common(1)[0] if tick else (None, 0))
+    if code_score < 3:
+        code_d = None
     year_d, year_strong = (year.most_common(1)[0][0], True) if year else (None, False)
     if year_d is None:  # dự phòng: năm đứng một mình ở 3 trang đầu (trang bìa)
         c = Counter(int(y) for t in texts[:3] for y in re.findall(r"(?<!\d)(20[0-3]\d)(?!\d)", t))
@@ -327,7 +328,11 @@ def process_one(pdf: Path, seen: set):
     members = d.get("members") or []
     # Tự đếm TV BKS sở hữu 0% từ danh sách (tin cậy hơn số model điền)
     bmem = [m for m in members if m.get("body") == "BKS"]
-    if bmem and all(m.get("own_pct") is not None for m in bmem):
+    if bmem and any(m.get("own_pct") is None for m in bmem):
+        miss = ", ".join(m.get("name", "?") for m in bmem if m.get("own_pct") is None)
+        flags.append(f"Báo cáo không công bố sở hữu của TV BKS: {miss} → BKS 0% để N/A (kiểm tra thủ công)")
+        kz = None
+    elif bmem:
         kz_calc = sum(1 for m in bmem if float(m["own_pct"]) == 0)
         if kz != kz_calc:
             flags.append(f"BKS 0% đếm lại từ danh sách = {kz_calc} (model điền {kz})")
