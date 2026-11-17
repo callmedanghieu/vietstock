@@ -234,11 +234,12 @@ def list_pdfs(in_dirs):
 PROMPT = """Bạn là trợ lý trích dữ liệu quản trị công ty từ Báo cáo thường niên của công ty niêm yết Việt Nam.
 Dưới đây là một khối "DÒNG NHẬN DIỆN" (các dòng có tên công ty/mã CK/năm) và text của các trang liên quan (mỗi trang bắt đầu bằng "=== TRANG n ===").
 NĂM BÁO CÁO: year là năm tài chính được báo cáo. BCTN 2021 thường phát hành đầu/giữa 2022 và nhắc nhiều ngày tháng của 2022 — vẫn là năm 2021; bỏ qua ngày phát hành và ngày họp năm sau khi xác định year.
-NGÀY THAM CHIẾU (ref_date, dd/mm/yyyy): thời điểm mà phần thông tin HĐQT/BKS/sở hữu trong báo cáo được công bố hoặc cập nhật (ví dụ "tại ngày 11/04/2025", "danh sách chốt ngày…", ngày phát hành/công bố báo cáo). Không có → null.
+NGÀY THAM CHIẾU (ref_date, dd/mm/yyyy): thời điểm MUỘN NHẤT mà phần thông tin HĐQT/BKS/sở hữu trong báo cáo được công bố hoặc cập nhật (ví dụ "tại ngày 11/04/2025", "danh sách chốt ngày…", ngày phát hành/công bố báo cáo). Không có → null.
 
 Quy tắc:
 - ticker: mã chứng khoán của công ty (3 ký tự) theo khối "DÒNG NHẬN DIỆN" hoặc các trang. Không thấy → null.
-- members: liệt kê TẤT CẢ cá nhân từng là thành viên HĐQT hoặc BKS được nhắc trong báo cáo (kể cả người đã miễn nhiệm/từ nhiệm hoặc mới bổ nhiệm), mỗi người một dòng, kèm:
+- members: CHỈ liệt kê người có chức danh thành viên HĐQT (kể cả Chủ tịch, Phó Chủ tịch, thành viên độc lập/không điều hành) hoặc thành viên BKS. Phó Tổng Giám đốc, Kế toán trưởng, giám đốc các khối KHÔNG phải thành viên HĐQT trừ khi báo cáo ghi rõ họ cũng là thành viên HĐQT; một người đã thôi làm Phó TGĐ không có nghĩa là rời HĐQT.
+  Liệt kê TẤT CẢ cá nhân từng là thành viên HĐQT hoặc BKS được nhắc trong báo cáo (kể cả người đã miễn nhiệm/từ nhiệm hoặc mới bổ nhiệm), mỗi người một dòng, kèm:
   appointed_date (ngày bắt đầu giữ chức trong nhiệm kỳ hiện tại; null nếu không nêu hoặc từ trước năm báo cáo),
   left_date (ngày miễn nhiệm/từ nhiệm; null nếu còn tại vị),
   reason (ngắn, nếu có thay đổi nhân sự),
@@ -344,6 +345,11 @@ def split_members(members, ref):
     """Tách thành viên theo ngày tham chiếu: còn tại vị / bị loại (kèm lý do)."""
     keep, drop = [], []
     for m in members:
+        rl = fold(m.get("role") or "").lower()
+        need = ("kiem soat", "bks") if m.get("body") == "BKS" else ("hdqt", "hoi dong quan tri", "chu tich", "thanh vien", "uy vien", "doc lap")
+        if not any(k in rl for k in need):
+            drop.append((m, f"Chức vụ '{m.get('role')}' không thuộc {m.get('body')} (có thể là Ban điều hành)"))
+            continue
         ap, lf = parse_date(m.get("appointed_date")), parse_date(m.get("left_date"))
         why = None
         if ref and lf and lf <= ref:
@@ -389,11 +395,13 @@ def process_one(pdf: Path, seen: set):
     seen.add((code, year))
 
     # ---- Ngày tham chiếu: ngày công bố/cập nhật trong báo cáo; thiếu → ngày số liệu sở hữu; thiếu nữa → 31/12 của năm ----
-    ref = parse_date(d.get("ref_date"))
-    if ref is None and d.get("own_date"):
-        ref = parse_date(d.get("own_date"))
-        if ref:
-            flags.append(f"Báo cáo không nêu ngày tham chiếu → dùng ngày số liệu sở hữu {ref:%d/%m/%Y}")
+    ref, own_dt = parse_date(d.get("ref_date")), parse_date(d.get("own_date"))
+    if ref is None and own_dt:
+        ref = own_dt
+        flags.append(f"Báo cáo không nêu ngày tham chiếu → dùng ngày số liệu sở hữu {ref:%d/%m/%Y}")
+    elif ref and own_dt and own_dt > ref:
+        flags.append(f"Ngày tham chiếu model chọn {ref:%d/%m/%Y} sớm hơn ngày số liệu sở hữu {own_dt:%d/%m/%Y} → dùng {own_dt:%d/%m/%Y}")
+        ref = own_dt
     if ref is None and year:
         import datetime as dt
         ref = dt.date(int(year), 12, 31)
