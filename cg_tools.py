@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-cg_tools.py — công cụ phụ cho workflow chạy song song.
+cg_tools.py — công cụ phụ cho workflow chạy song song (chia shard + gộp kết quả).
 
   plan   Chia danh sách PDF cần xử lý thành N phần (shard) và in ra phần của shard k.
          Nguồn: các file đính kèm Release (--assets assets.jsonl) hoặc thư mục (--dir bctn).
