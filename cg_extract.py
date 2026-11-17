@@ -278,6 +278,20 @@ SCHEMA = {
 }
 
 
+def normalize(d: dict) -> dict:
+    """Model đôi khi trả members dạng chuỗi JSON hoặc lẫn phần tử không phải object."""
+    mem = d.get("members")
+    if isinstance(mem, str):
+        try:
+            mem = json.loads(mem)
+        except Exception:
+            mem = None
+    if isinstance(mem, dict):
+        mem = [mem]
+    d["members"] = [m for m in (mem or []) if isinstance(m, dict)]
+    return d
+
+
 def call_claude(text: str) -> dict:
     import anthropic
     client = anthropic.Anthropic()
@@ -291,7 +305,7 @@ def call_claude(text: str) -> dict:
     )
     for b in msg.content:
         if getattr(b, "type", "") == "tool_use":
-            return dict(b.input)
+            return normalize(dict(b.input))
     return {"note": "Model không trả tool_use (stop_reason=%s)" % msg.stop_reason}
 
 
@@ -355,10 +369,14 @@ def process_one(pdf: Path, seen: set):
                 "không có trang phù hợp")
     blob = "=== DÒNG NHẬN DIỆN CÔNG TY / NĂM (trích từ phần đầu báo cáo) ===\n" + "\n".join(id_lines)
     blob += "\n\n" + "\n\n".join(f"=== TRANG {i+1} ===\n{texts[i]}" for i in pages)
-    try:
-        d = call_claude(blob)
-    except Exception as e:
-        d = {"note": f"API lỗi: {e}"}
+    d = {}
+    for attempt in range(2):                    # gọi lại một lần nếu kết quả hỏng/không có danh sách thành viên
+        try:
+            d = call_claude(blob)
+        except Exception as e:
+            d = {"note": f"API lỗi: {e}"}
+        if d.get("members"):
+            break
 
     code_m = (d.get("ticker") or "").strip().upper() or None
     year_m = d.get("year")
