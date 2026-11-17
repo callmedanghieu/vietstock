@@ -134,7 +134,7 @@ def call_claude(text: str) -> dict:
         max_tokens=1500,
         messages=[{"role": "user", "content": PROMPT + "\n\n" + text}],
     )
-    raw = msg.content[0].text
+    raw = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
     m = re.search(r"\{.*\}", raw, re.S)
     return json.loads(m.group(0)) if m else {"note": "JSON parse fail: " + raw[:200]}
 
@@ -146,6 +146,10 @@ def mode_api(in_dir: Path, out_xlsx: Path):
            "Trang nguồn", "Ghi chú", "Chi tiết thành viên", "File"]
     if out_xlsx.exists():
         wb = load_workbook(out_xlsx); ws = wb.active
+        # xoá các dòng lỗi API lần trước để chạy lại
+        for row in range(ws.max_row, 1, -1):
+            if str(ws.cell(row, 12).value or "").startswith("API lỗi"):
+                ws.delete_rows(row)
         done = {(r[13]) for r in ws.iter_rows(min_row=2, values_only=True)}
     else:
         wb = Workbook(); ws = wb.active; ws.title = "CG_data"; ws.append(hdr); done = set()
