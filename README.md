@@ -23,10 +23,16 @@ Nếu tên file có dạng `VNM_2023.pdf` thì được dùng để đối chi�
 
 **Cách phụ (đợt nhỏ ≤ 20 file, mỗi file < 25 MB):** upload PDF vào thư mục `bctn/` (Add file → Upload files → Commit). Lưu ý PDF trong `bctn/` tính vào dung lượng repo (giới hạn ~1 GB) và xoá đi vẫn còn trong lịch sử git, nên chỉ dùng để thử.
 
+## Quy tắc xác định số liệu
+- **Năm BCTN** = năm tài chính được báo cáo. BCTN 2021 phát hành đầu 2022 và nhắc ngày tháng 2022 vẫn là 2021.
+- **Ngày tham chiếu** = thời điểm muộn nhất báo cáo công bố/cập nhật thông tin HĐQT, BKS, sở hữu (ví dụ "tại ngày 11/04/2025"). Không có thì dùng 31/12 của năm báo cáo (có cảnh báo).
+- Chỉ tính thành viên **còn tại vị tại ngày tham chiếu**: loại người miễn nhiệm/từ nhiệm trước ngày đó, người bổ nhiệm sau ngày đó, và người có chức danh không thuộc HĐQT/BKS (Ban điều hành).
+- Mọi người bị loại, kèm lý do, nằm trong sheet **Thanh_vien** (dòng tô vàng, cột *Tính vào số liệu* = KHÔNG) và trong cột Ghi chú.
+
 ## Đọc kết quả
 - Mỗi dòng = một công ty-năm. File đã xử lý không chạy lại; dòng lỗi API sẽ tự chạy lại ở đợt sau.
 - Ưu tiên soát các dòng có cột **Ghi chú** bắt đầu bằng `[...]` (script phải tính lại hoặc phát hiện lệch) hoặc có `N/A`.
-- Cột **Chi tiết thành viên** liệt kê từng người kèm tỷ lệ sở hữu để đối chiếu.
+- Sheet **Thanh_vien** liệt kê từng người (cả người bị loại) với ngày bổ nhiệm/miễn nhiệm, độc lập hay không, tỷ lệ sở hữu để đối chiếu.
 
 ## Chạy trên máy (không cần GitHub)
 ```
