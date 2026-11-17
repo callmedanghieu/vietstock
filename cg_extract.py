@@ -196,6 +196,15 @@ def mode_api(in_dir: Path, out_xlsx: Path):
         kt, kz = d.get("bks_total"), d.get("bks_zero")
         ined = round(bi / bt, 4) if bt and bi is not None else "N/A"
         pbks = round(kz / kt, 4) if kt and kz is not None else "N/A"
+        # Tự đếm TV BKS sở hữu 0% từ danh sách (tin cậy hơn số model điền)
+        bmem = [m for m in d.get("members", []) if m.get("body") == "BKS"]
+        if bmem and all(m.get("own_pct") is not None for m in bmem):
+            kz_calc = sum(1 for m in bmem if float(m["own_pct"]) == 0)
+            if kz != kz_calc:
+                d["note"] = f"[BKS 0% đếm lại từ danh sách = {kz_calc} (model điền {kz})] " + (d.get("note") or "")
+            kz = kz_calc
+            if kt is not None and len(bmem) != kt:
+                d["note"] = f"[Số TV BKS trong danh sách ({len(bmem)}) khác bks_total ({kt}) – kiểm tra] " + (d.get("note") or "")
         own = d.get("board_own_pct")
         # Tự cộng tỷ lệ sở hữu cá nhân HĐQT từ danh sách thành viên (tin cậy hơn số model điền)
         mem = [m for m in d.get("members", []) if m.get("body") == "HDQT"]
