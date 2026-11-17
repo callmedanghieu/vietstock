@@ -118,7 +118,7 @@ Quy tắc:
 - Tổng % sở hữu HĐQT: cộng tỷ lệ sở hữu CÁ NHÂN của các thành viên HĐQT cuối năm (không cộng phần đại diện cho tổ chức). Không tìm được → null.
 - Không đoán. Thiếu thì để null và nói rõ trong "note".
 
-Trả về DUY NHẤT một JSON object:
+Điền kết quả vào tool ghi_ket_qua. Ý nghĩa các trường:
 {"board_total": int|null, "board_independent": int|null, "bks_total": int|null, "bks_zero": int|null,
  "board_own_pct": float|null (ví dụ 6.56 nghĩa là 6,56%), "own_date": "dd/mm/yyyy"|null,
  "members": [{"name": str, "body": "HDQT"|"BKS", "role": str, "independent": bool, "own_pct": float|null}],
@@ -126,17 +126,42 @@ Trả về DUY NHẤT một JSON object:
 """
 
 
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "board_total": {"type": ["integer", "null"]},
+        "board_independent": {"type": ["integer", "null"]},
+        "bks_total": {"type": ["integer", "null"]},
+        "bks_zero": {"type": ["integer", "null"]},
+        "board_own_pct": {"type": ["number", "null"], "description": "6.56 nghĩa là 6,56%"},
+        "own_date": {"type": ["string", "null"]},
+        "members": {"type": "array", "items": {"type": "object", "properties": {
+            "name": {"type": "string"}, "body": {"type": "string", "enum": ["HDQT", "BKS"]},
+            "role": {"type": "string"}, "independent": {"type": "boolean"},
+            "own_pct": {"type": ["number", "null"]}}, "required": ["name", "body", "role", "independent", "own_pct"]}},
+        "pages": {"type": "string"},
+        "note": {"type": "string"},
+    },
+    "required": ["board_total", "board_independent", "bks_total", "bks_zero", "board_own_pct",
+                 "own_date", "members", "pages", "note"],
+}
+
+
 def call_claude(text: str) -> dict:
     import anthropic
     client = anthropic.Anthropic()
     msg = client.messages.create(
         model=os.environ.get("CG_MODEL", "claude-haiku-5-5"),
-        max_tokens=1500,
+        max_tokens=8000,
+        tools=[{"name": "ghi_ket_qua", "description": "Ghi kết quả trích dữ liệu quản trị công ty",
+                "input_schema": SCHEMA}],
+        tool_choice={"type": "tool", "name": "ghi_ket_qua"},
         messages=[{"role": "user", "content": PROMPT + "\n\n" + text}],
     )
-    raw = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
-    m = re.search(r"\{.*\}", raw, re.S)
-    return json.loads(m.group(0)) if m else {"note": "JSON parse fail: " + raw[:200]}
+    for b in msg.content:
+        if getattr(b, "type", "") == "tool_use":
+            return dict(b.input)
+    return {"note": "Model không trả tool_use (stop_reason=%s)" % msg.stop_reason}
 
 
 def mode_api(in_dir: Path, out_xlsx: Path):
@@ -148,7 +173,7 @@ def mode_api(in_dir: Path, out_xlsx: Path):
         wb = load_workbook(out_xlsx); ws = wb.active
         # xoá các dòng lỗi API lần trước để chạy lại
         for row in range(ws.max_row, 1, -1):
-            if str(ws.cell(row, 12).value or "").startswith("API lỗi"):
+            if str(ws.cell(row, 12).value or "").startswith(("API lỗi", "JSON parse fail", "Model không trả")):
                 ws.delete_rows(row)
         done = {(r[13]) for r in ws.iter_rows(min_row=2, values_only=True)}
     else:
