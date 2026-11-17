@@ -1,0 +1,44 @@
+name: Trích dữ liệu CG từ BCTN
+
+on:
+  push:
+    paths:
+      - "bctn/**"
+      - "cg_extract.py"
+  workflow_dispatch:      # cho phép bấm nút "Run workflow" thủ công
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extract
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cài OCR (cho file scan)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-vie
+
+      - name: Cài thư viện Python
+        run: pip install -r requirements.txt
+
+      - name: Chạy trích dữ liệu
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python cg_extract.py api --in bctn --out ket_qua.xlsx
+
+      - name: Commit kết quả về repo
+        run: |
+          git config user.name "cg-bot"
+          git config user.email "cg-bot@users.noreply.github.com"
+          git add ket_qua.xlsx
+          git diff --cached --quiet || git commit -m "Cập nhật ket_qua.xlsx [skip ci]"
+          git push
