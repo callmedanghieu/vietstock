@@ -347,7 +347,9 @@ def split_members(members, ref):
     for m in members:
         rl = fold(m.get("role") or "").lower()
         need = ("kiem soat", "bks") if m.get("body") == "BKS" else ("hdqt", "hoi dong quan tri", "chu tich", "thanh vien", "uy vien", "doc lap")
-        if not any(k in rl for k in need):
+        exec_first = rl.startswith(("pho tong giam doc", "tong giam doc", "ke toan truong", "pho giam doc", "giam doc"))
+        negated = bool(re.search(r"khong\s+(?:nen|phai|thuoc|duoc\s+nhac|ro|co\s+ten)", rl))
+        if exec_first or negated or not any(k in rl for k in need):
             drop.append((m, f"Chức vụ '{m.get('role')}' không thuộc {m.get('body')} (có thể là Ban điều hành)"))
             continue
         ap, lf = parse_date(m.get("appointed_date")), parse_date(m.get("left_date"))
