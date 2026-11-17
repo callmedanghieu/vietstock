@@ -7,11 +7,9 @@
 2. Tổng số thành viên BKS và số thành viên BKS sở hữu 0% cổ phần (→ % BKS không sở hữu)
 3. Tổng tỷ lệ sở hữu cổ phần cá nhân của HĐQT
 
-## Đặt tên file PDF
-Chuẩn: **`MÃCK_NĂM.pdf`** — ví dụ `VNM_2023.pdf`, `FPT_2024.pdf`, `L14_2022.pdf`. Năm là năm được báo cáo (BCTN 2023 → `2023`).
-
-Các dạng sau cũng được nhận: `VNM2023.pdf`, `VNM_Baocaothuongnien_2023.pdf`, `Bao cao thuong nien 2023 - VNM.pdf`.
-Nếu không đọc được mã/năm từ tên file, script lấy từ nội dung PDF và ghi cảnh báo trong cột **Ghi chú**.
+## Tên file PDF
+Không cần đổi tên: script đọc **mã chứng khoán** và **năm báo cáo** từ nội dung PDF (các dòng "Mã chứng khoán: XXX", "Mã cổ phiếu", "Báo cáo thường niên 20xx", "Annual report 20xx" — lấy giá trị xuất hiện nhiều nhất).
+Nếu tên file có dạng `VNM_2023.pdf` thì được dùng để đối chiếu; khi tên file và nội dung lệch nhau, script dùng theo nội dung và ghi cảnh báo `[...]` ở cột Ghi chú. Model đọc thêm một lần nữa làm ý kiến thứ ba.
 
 ## Cách dùng
 

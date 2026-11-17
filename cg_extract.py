@@ -13,9 +13,8 @@ Cách dùng:
   python cg_extract.py api --in ./bctn --out ./ket_qua.xlsx
   (có thể đưa nhiều thư mục: --in ./bctn ./bctn_release)
 
-Tên file PDF: MÃCK_NĂM.pdf là chuẩn (VNM_2023.pdf). Các dạng sau cũng nhận được:
-  VNM2023.pdf, VNM_Baocaothuongnien_2023.pdf, Bao cao thuong nien 2023 - VNM.pdf
-Nếu không đọc được mã/năm từ tên file, script lấy từ nội dung tài liệu và ghi chú để kiểm tra.
+Không cần đổi tên file: mã CK và năm được đọc từ NỘI DUNG tài liệu ("Mã chứng khoán: XXX",
+"Báo cáo thường niên 20xx"). Tên file (nếu có dạng VNM_2023.pdf) chỉ dùng để đối chiếu; lệch thì ghi cảnh báo.
 """
 import argparse, json, os, re, sys, unicodedata
 from pathlib import Path
@@ -31,11 +30,9 @@ KW_WEAK = [    # mỗi hit = 1 điểm
     "người nội bộ", "cổ đông nội bộ", "thời gian đương nhiệm", "nhiệm kỳ",
 ]
 KW_NEG = ["kiểm toán độc lập", "ý kiến kiểm toán", "lưu chuyển tiền tệ", "thuyết minh báo cáo tài chính"]
-KW_ID = ["mã chứng khoán", "mã cổ phiếu", "mã ck"]   # trang nhận diện công ty
 
 MAX_PAGES = 12      # số trang tối đa giữ lại cho mỗi báo cáo
 MIN_SCORE = 4       # điểm tối thiểu để giữ trang
-INTRO_CHARS = 1500  # số ký tự của các trang đầu gửi kèm để nhận diện mã CK / năm
 OCR_DPI = 200
 
 
@@ -97,13 +94,88 @@ def select_pages(texts):
     return sorted(keep)
 
 
-def intro_pages(texts, chosen):
-    """Trang đầu + trang có 'mã chứng khoán' (rút gọn) để model nhận diện công ty và năm."""
-    idx = [0, 1]
-    for i, t in enumerate(texts[:15]):
-        if any(k in norm(t) for k in KW_ID):
-            idx.append(i); break
-    return [i for i in dict.fromkeys(idx) if i < len(texts) and i not in chosen]
+# ---------- Nhận diện mã CK / năm từ NỘI DUNG tài liệu ----------
+def fold(s: str) -> str:
+    """Bỏ dấu tiếng Việt nhưng giữ chữ hoa/thường (để tìm 'Mã chứng khoán: XXX')."""
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return s.replace("đ", "d").replace("Đ", "D")
+
+
+LABEL = (r"(?i:ma\s*(?:chung\s*khoan|co\s*phieu|ck)(?:\s*niem\s*yet)?(?:\s*\([^)]{1,25}\))?"
+         r"(?:\s*/\s*(?:securities\s*(?:symbol|code)|stock\s*code|ticker(?:\s*symbol)?))?"
+         r"|stock\s*code|securities\s*(?:symbol|code)|ticker(?:\s*symbol)?)")
+TK = r"([A-Z][A-Z0-9]{2})"
+# (regex, trọng số): nhãn → mã; mã → nhãn; nhãn ở cuối dòng và mã ở cuối dòng kế tiếp (bố cục 2 cột); tín hiệu phụ
+RE_TICKERS = [
+    (re.compile(LABEL + r"\s*(?:(?i:la|is)\s+)?[:\-–]?\s*(?:(?:HOSE|HNX|UPCOM|HSX)\s*[:\-–]\s*)?\(?" + TK + r"\b"), 3),
+    (re.compile(r"\b" + TK + r"\s*[-–:]?\s*" + LABEL), 3),
+    (re.compile(LABEL + r"\s*:?[ \t]*\n[^\n]*?\b" + TK + r"[ \t]*$", re.M), 3),
+    (re.compile(r"(?i:phat\s*hanh)\s*\(\s*" + TK + r"\s*\)"), 2),
+    (re.compile(r"(?i:co\s*phieu)\s+" + TK + r"\b"), 1),
+]
+RE_YEAR = re.compile(r"(?i)(?:bao\s*cao\s*thuong\s*nien|annual\s*report)[^0-9]{0,80}?(20[0-3]\d)\b")
+NOT_TICKER = {"HNX", "HSX", "HOS", "UPC", "OTC", "ETF", "VND", "USD", "EUR", "JPY", "CTC", "CEO", "CFO", "COO",
+              "BKS", "TGD", "VSD", "SSC", "ESG", "KPI", "GDP", "CPI", "EPS", "ROA", "ROE", "IPO", "ERP", "CRM",
+              "BOD", "BOM", "VAS", "CIT", "VAT", "PIT", "FDI", "ODA", "MOU", "CSR", "ISO", "PDF", "TAP", "CTY"}
+ID_KEYS = ["bao cao thuong nien", "annual report", "ma chung khoan", "ma co phieu", "ma ck",
+           "stock code", "ticker", "ten cong ty", "ten giao dich", "ten doanh nghiep"]
+
+
+def detect_identity(texts):
+    """Trả về (mã CK, năm, mã-có-chắc-không, năm-có-chắc-không, các dòng nhận diện gửi kèm cho model)."""
+    from collections import Counter
+    tick, year = Counter(), Counter()
+    for t in texts:
+        f = fold(t)
+        for rx, w in RE_TICKERS:
+            for m in rx.finditer(f):
+                if m.group(1) not in NOT_TICKER:
+                    tick[m.group(1)] += w
+        for m in RE_YEAR.finditer(f):
+            year[int(m.group(1))] += 1
+    code_d, code_score = (tick.most_common(1)[0] if tick else (None, 0))
+    year_d, year_strong = (year.most_common(1)[0][0], True) if year else (None, False)
+    if year_d is None:  # dự phòng: năm đứng một mình ở 3 trang đầu (trang bìa)
+        c = Counter(int(y) for t in texts[:3] for y in re.findall(r"(?<!\d)(20[0-3]\d)(?!\d)", t))
+        year_d = c.most_common(1)[0][0] if c else None
+    lines = []
+    for t in texts[:15]:
+        for ln in t.splitlines():
+            if any(k in fold(ln).lower() for k in ID_KEYS):
+                lines.append(ln.strip()[:160])
+            if len(lines) >= 25:
+                break
+        if len(lines) >= 25:
+            break
+    return code_d, year_d, code_score >= 3, year_strong, lines
+
+
+def choose(label, v_file, v_doc, v_model, doc_strong=True):
+    """Ưu tiên: nội dung tài liệu (nếu nhận diện chắc) > tên file > model. Trả về (giá trị, [cảnh báo])."""
+    flags = []
+    if v_doc is not None and v_file is not None:
+        if v_doc == v_file:
+            v = v_doc
+        elif doc_strong:
+            v = v_doc
+            flags.append(f"{label} theo tên file ({v_file}) khác nội dung tài liệu ({v_doc}) – dùng theo tài liệu")
+        else:
+            v = v_file
+            flags.append(f"{label} nhận diện yếu từ tài liệu ({v_doc}) khác tên file ({v_file}) – dùng theo tên file")
+    elif v_doc is not None:
+        v = v_doc
+        if not doc_strong:
+            flags.append(f"{label} nhận diện yếu từ tài liệu ({v_doc}) – kiểm tra")
+    elif v_file is not None:
+        v = v_file
+        flags.append(f"Không tìm thấy {label.lower()} trong tài liệu – dùng theo tên file ({v_file})")
+    else:
+        v = v_model
+        flags.append(f"{label} chỉ lấy được từ model ({v_model}) – kiểm tra")
+    if v_model is not None and v is not None and v_model != v:
+        flags.append(f"Model đọc {label.lower()} = {v_model}, khác giá trị dùng ({v}) – kiểm tra")
+    return v, flags
 
 
 # ---------- Mã CK / năm từ tên file ----------
@@ -159,11 +231,11 @@ def list_pdfs(in_dirs):
 
 # ---------- Chế độ API ----------
 PROMPT = """Bạn là trợ lý trích dữ liệu quản trị công ty từ Báo cáo thường niên của công ty niêm yết Việt Nam.
-Dưới đây là text của các trang liên quan (mỗi trang bắt đầu bằng "=== TRANG n ===").
+Dưới đây là một khối "DÒNG NHẬN DIỆN" (các dòng có tên công ty/mã CK/năm) và text của các trang liên quan (mỗi trang bắt đầu bằng "=== TRANG n ===").
 Lấy số liệu tại thời điểm CUỐI NĂM báo cáo; người đã miễn nhiệm trong năm không tính.
 
 Quy tắc:
-- ticker: mã chứng khoán của công ty (3 ký tự) nếu tìm thấy trong text; year: năm của báo cáo thường niên (năm được báo cáo, không phải năm phát hành).
+- ticker: mã chứng khoán của công ty (3 ký tự) theo khối "DÒNG NHẬN DIỆN" hoặc các trang; year: năm của báo cáo thường niên (năm được báo cáo, không phải năm phát hành). Không thấy → null.
 - TV độc lập HĐQT: đếm người được ghi rõ "độc lập" ở BẤT KỲ chỗ nào trong các trang (tiêu đề bio, bảng HĐQT, danh sách trong BCTC, nghị quyết). "Không điều hành" mà không ghi "độc lập" thì KHÔNG đếm. Nếu báo cáo nêu rõ số lượng (ví dụ "02 thành viên độc lập", "02/04 thành viên là độc lập") thì ưu tiên số đó và nêu tên những người xác định được.
 - TV BKS sở hữu 0%: thành viên Ban kiểm soát có số cổ phần = 0 hoặc tỷ lệ 0%/0,00%. Công ty mô hình 1 tầng (không có BKS, có Ủy ban kiểm toán) → bks_total = null.
 - Tổng % sở hữu HĐQT: cộng tỷ lệ sở hữu CÁ NHÂN của các thành viên HĐQT cuối năm (không cộng phần đại diện cho tổ chức). Không tìm được → null.
@@ -227,31 +299,25 @@ def process_one(pdf: Path, seen: set):
     """Trả về (row, summary). Ném exception nếu lỗi nặng (caller ghi dòng LỖI)."""
     code_f, year_f = parse_name(pdf)
     texts = page_texts(pdf)
+    code_d, year_d, c_strong, y_strong, id_lines = detect_identity(texts)
     pages = select_pages(texts)
     if not pages:
-        return ([code_f or pdf.stem[:3].upper(), year_f] + ["N/A"] * 7 +
+        return ([code_d or code_f or pdf.stem[:3].upper(), year_d or year_f] + ["N/A"] * 7 +
                 ["", "", "Không tìm được trang phù hợp (file scan chưa OCR được? kiểm tra lại)", "", pdf.name],
                 "không có trang phù hợp")
-    intro = intro_pages(texts, pages)
-    blob = "\n\n".join(f"=== TRANG {i+1} (đầu báo cáo, chỉ để nhận diện công ty/năm) ===\n{texts[i][:INTRO_CHARS]}"
-                       for i in intro)
+    blob = "=== DÒNG NHẬN DIỆN CÔNG TY / NĂM (trích từ phần đầu báo cáo) ===\n" + "\n".join(id_lines)
     blob += "\n\n" + "\n\n".join(f"=== TRANG {i+1} ===\n{texts[i]}" for i in pages)
     try:
         d = call_claude(blob)
     except Exception as e:
         d = {"note": f"API lỗi: {e}"}
 
-    flags = []
     code_m = (d.get("ticker") or "").strip().upper() or None
     year_m = d.get("year")
-    if code_f and code_m and code_f != code_m:
-        flags.append(f"Mã CK theo tên file ({code_f}) khác trong tài liệu ({code_m}) – kiểm tra")
-    if year_f and year_m and year_f != year_m:
-        flags.append(f"Năm theo tên file ({year_f}) khác trong tài liệu ({year_m}) – kiểm tra")
-    if not code_f or not year_f:
-        flags.append("Tên file không có mã CK/năm – lấy từ nội dung tài liệu")
-    code = code_f or code_m or pdf.stem[:3].upper()
-    year = year_f or year_m
+    code, flags = choose("Mã CK", code_f, code_d, code_m, c_strong)
+    year, fl_y = choose("Năm", year_f, year_d, year_m, y_strong)
+    flags += fl_y
+    code = code or pdf.stem[:3].upper()
     if (code, year) in seen:
         flags.append("Trùng mã CK-năm với dòng khác")
     seen.add((code, year))
@@ -323,7 +389,7 @@ def mode_api(in_dirs, out_xlsx: Path):
             if c.column in (5, 8, 9) and isinstance(c.value, float):
                 c.number_format = "0.00%"
         wb.save(out_xlsx)
-        print(f"{pdf.name}: {summary}")
+        print(f"{pdf.name} → {row[0]} {row[1]}: {summary}")
 
 
 if __name__ == "__main__":
