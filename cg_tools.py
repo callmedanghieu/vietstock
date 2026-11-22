@@ -13,7 +13,7 @@ cg_tools.py — công cụ phụ cho workflow chạy song song (chia shard + g�
 import argparse, json, sys
 from pathlib import Path
 
-from cg_extract import ERR_PREFIX, HDR, MHDR
+from cg_extract import ERR_PREFIX, HDR, MHDR, apply_coverage, print_coverage
 
 
 def done_files(xlsx: Path):
@@ -47,6 +47,15 @@ def mode_plan(a):
     print(f"shard {a.shard}/{a.n}: {len(mine)} / {len(items)} file cần xử lý", file=sys.stderr)
     for i, n in mine:
         print(f"{i}\t{n}")
+
+
+def mode_check(a):
+    """Quét thử thư mục/Release trước khi chạy: công ty nào thiếu BCTN năm nào trong 2019-2025."""
+    if a.assets:
+        names = [json.loads(l)["name"] for l in Path(a.assets).read_text(encoding="utf-8").splitlines() if l.strip()]
+    else:
+        names = [p.name for p in Path(a.dir).iterdir() if p.is_file() and p.suffix.lower() == ".pdf"]
+    print_coverage(names)
 
 
 def fmt_row(ws, kind):
@@ -100,6 +109,7 @@ def mode_merge(a):
         ws.append(list(r)); fmt_row(ws, "data")
     for r in mem_rows:
         wm.append(list(r)); fmt_row(wm, "mem")
+    apply_coverage(wb)
     wb.save(tgt)
     print(f"Gộp {len(data_rows)} dòng dữ liệu, {len(mem_rows)} dòng thành viên từ {len(a.inputs)} file → {tgt}")
 
@@ -113,5 +123,7 @@ if __name__ == "__main__":
     p1.add_argument("--shard", type=int, required=True); p1.add_argument("--n", type=int, required=True)
     p2 = sub.add_parser("merge")
     p2.add_argument("--target", default="ket_qua.xlsx"); p2.add_argument("--inputs", nargs="*", default=[])
+    p3 = sub.add_parser("check")
+    p3.add_argument("--assets"); p3.add_argument("--dir", default="bctn")
     a = ap.parse_args()
-    (mode_plan if a.cmd == "plan" else mode_merge)(a)
+    {"plan": mode_plan, "merge": mode_merge, "check": mode_check}[a.cmd](a)

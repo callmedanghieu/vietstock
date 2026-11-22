@@ -1,3 +1,8 @@
 __pycache__/
 bctn_release/
 slim/
+.venv/
+.env
+ket_qua_local.xlsx
+run.log
+bctn/*.pdf

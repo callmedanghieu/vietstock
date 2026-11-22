@@ -8,8 +8,8 @@
 3. Tổng tỷ lệ sở hữu cổ phần cá nhân của HĐQT
 
 ## Tên file PDF
-Không cần đổi tên: script đọc **mã chứng khoán** và **năm báo cáo** từ nội dung PDF (các dòng "Mã chứng khoán: XXX", "Mã cổ phiếu", "Báo cáo thường niên 20xx", "Annual report 20xx" — lấy giá trị xuất hiện nhiều nhất).
-Nếu tên file có dạng `VNM_2023.pdf` thì được dùng để đối chiếu; khi tên file và nội dung lệch nhau, script dùng theo nội dung và ghi cảnh báo `[...]` ở cột Ghi chú. Model đọc thêm một lần nữa làm ý kiến thứ ba.
+**Tên file là nguồn chính** cho mã chứng khoán và năm (ví dụ `FPT_Baocaothuongnien_2019.pdf`, `VNM_2023.pdf`): toàn bộ thông tin trong file được coi là của mã và năm đó.
+Chỉ khi tên file không đọc được thì script mới lấy từ nội dung PDF ("Mã chứng khoán: XXX", "Báo cáo thường niên 20xx"). Nội dung lệch với tên file chỉ được ghi cảnh báo `[...]` ở cột Ghi chú, không đổi giá trị.
 
 ## Cách dùng
 

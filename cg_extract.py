@@ -19,6 +19,12 @@ Không cần đổi tên file: mã CK và năm được đọc từ NỘI DUNG t
 import argparse, json, os, re, sys, unicodedata
 from pathlib import Path
 
+try:  # đọc ANTHROPIC_API_KEY từ file .env (nếu có); trên GitHub Actions dùng secret nên bỏ qua
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).with_name(".env"))
+except ImportError:
+    pass
+
 # ---------- Từ khoá nhận diện trang liên quan ----------
 KW_STRONG = [  # mỗi hit = 3 điểm
     "tỷ lệ sở hữu cổ phần", "sở hữu cổ phần", "số cổ phần sở hữu", "cổ phần nắm giữ",
@@ -48,7 +54,10 @@ def ocr_page(args) -> str:
     pdf_path, pageno = args
     try:
         from pdf2image import convert_from_path
-        import pytesseract
+        import pytesseract, shutil
+        win = r"C:\Program Files\Tesseract-OCR\tesseract.exe"   # cài bằng installer Windows thường không vào PATH
+        if not shutil.which("tesseract") and os.path.exists(win):
+            pytesseract.pytesseract.tesseract_cmd = win
         img = convert_from_path(str(pdf_path), dpi=OCR_DPI, first_page=pageno, last_page=pageno)[0]
         return pytesseract.image_to_string(img, lang="vie+eng")
     except Exception as e:  # không có tesseract → bỏ qua, báo ra stderr
@@ -153,29 +162,19 @@ def detect_identity(texts):
 
 
 def choose(label, v_file, v_doc, v_model, doc_strong=True):
-    """Ưu tiên: nội dung tài liệu (nếu nhận diện chắc) > tên file > model. Trả về (giá trị, [cảnh báo])."""
+    """Ưu tiên: TÊN FILE (nguồn chính, mọi thông tin trong file thuộc mã/năm đó) > nội dung tài liệu > model.
+    Trả về (giá trị, [cảnh báo]). Lệch nội dung chỉ để cảnh báo, không đổi giá trị."""
     flags = []
-    if v_doc is not None and v_file is not None:
-        if v_doc == v_file:
-            v = v_doc
-        elif doc_strong:
-            v = v_doc
-            flags.append(f"{label} theo tên file ({v_file}) khác nội dung tài liệu ({v_doc}) – dùng theo tài liệu")
-        else:
-            v = v_file
-            flags.append(f"{label} nhận diện yếu từ tài liệu ({v_doc}) khác tên file ({v_file}) – dùng theo tên file")
+    if v_file is not None:
+        v = v_file
+        if v_doc is not None and v_doc != v_file and doc_strong:
+            flags.append(f"{label} nội dung tài liệu ({v_doc}) khác tên file ({v_file}) – dùng theo tên file")
     elif v_doc is not None:
         v = v_doc
-        if not doc_strong:
-            flags.append(f"{label} nhận diện yếu từ tài liệu ({v_doc}) – kiểm tra")
-    elif v_file is not None:
-        v = v_file
-        flags.append(f"Không tìm thấy {label.lower()} trong tài liệu – dùng theo tên file ({v_file})")
+        flags.append(f"Tên file không có {label.lower()} – dùng theo nội dung tài liệu ({v_doc})")
     else:
         v = v_model
         flags.append(f"{label} chỉ lấy được từ model ({v_model}) – kiểm tra")
-    if v_model is not None and v is not None and v_model != v:
-        flags.append(f"Model đọc {label.lower()} = {v_model}, khác giá trị dùng ({v}) – kiểm tra")
     return v, flags
 
 
@@ -230,6 +229,99 @@ def list_pdfs(in_dirs):
     return sorted(out, key=lambda p: p.name)
 
 
+# ---------- Kiểm tra mỗi công ty đã đủ BCTN 2019-2025 chưa ----------
+COV_YEARS = list(range(2019, 2026))
+RE_MISS = re.compile(r"\s*\[Thiếu BCTN[^\]]*\]")
+CHD = ["Mã CK", "Năm có BCTN", "Năm thiếu BCTN", "Trạng thái"]
+
+
+def coverage_from_names(names):
+    """names: tên file PDF → ({mã: {năm}}, [tên file không đọc được mã/năm])."""
+    cov, bad = {}, []
+    for n in names:
+        code, year = parse_name(Path(n))
+        if code and year:
+            cov.setdefault(code, set()).add(year)
+        else:
+            bad.append(n)
+    return cov, bad
+
+
+def print_coverage(names):
+    cov, bad = coverage_from_names(names)
+    full = [c for c, ys in cov.items() if all(y in ys for y in COV_YEARS)]
+    print(f"Kiểm tra BCTN {COV_YEARS[0]}-{COV_YEARS[-1]}: {len(cov)} công ty, {len(full)} đủ, {len(cov) - len(full)} thiếu")
+    for c in sorted(cov):
+        miss = [y for y in COV_YEARS if y not in cov[c]]
+        if miss:
+            print(f"  {c}: thiếu BCTN {', '.join(map(str, miss))}")
+    for n in bad:
+        print(f"  [không đọc được mã/năm từ tên file] {n}")
+
+
+SGROUPS = ["% INED", "% BKS không sở hữu cổ phần", "Tổng % sở hữu HĐQT"]   # thứ tự khớp CG_data cột 5, 8, 9
+SHDR = ["Mã CK"] + [f"{g} {y}" for g in SGROUPS for y in COV_YEARS]
+
+
+def build_summary(wb):
+    """Sheet chính 'Tong_hop': mỗi công ty một dòng; cột = % INED / % BKS không sở hữu / Tổng % sở hữu HĐQT theo từng năm
+    2019-2025. Năm thiếu BCTN → ô để trống. Mọi thông tin khác (tổng TV, ghi chú, cảnh báo, trang nguồn) ở sheet phụ
+    CG_data / Thanh_vien / Thieu_BCTN."""
+    from openpyxl.styles import Font, Alignment
+    from openpyxl.utils import get_column_letter
+    ws = wb["CG_data"]
+    data = {}
+    for r in ws.iter_rows(min_row=2, values_only=True):
+        if r and r[0] and isinstance(r[1], int) and (r[0], r[1]) not in data:
+            data[(r[0], r[1])] = (r[4], r[7], r[8])
+    if "Tong_hop" in wb.sheetnames:
+        del wb["Tong_hop"]
+    wt = wb.create_sheet("Tong_hop", 0)
+    wt.append(SHDR)
+    for c in wt[1]:
+        c.font = Font(bold=True)
+        c.alignment = Alignment(wrap_text=True, horizontal="center", vertical="center")
+    for code in sorted({k[0] for k in data}):
+        row = [code]
+        for gi in range(len(SGROUPS)):
+            for y in COV_YEARS:
+                v = data.get((code, y))
+                row.append(v[gi] if v else None)
+        wt.append(row)
+        for cell in wt[wt.max_row][1:]:
+            if isinstance(cell.value, float):
+                cell.number_format = "0.00%"
+    for j in range(2, len(SHDR) + 1):
+        wt.column_dimensions[get_column_letter(j)].width = 12
+    wt.freeze_panes = "B2"
+    wb.active = 0
+
+
+def apply_coverage(wb):
+    """Ghi '[Thiếu BCTN: ...]' cuối cột Ghi chú của từng dòng công ty và lập sheet Thieu_BCTN (tính trên cả workbook)."""
+    ws = wb["CG_data"]
+    cov = {}
+    for r in range(2, ws.max_row + 1):
+        c, y = ws.cell(r, 1).value, ws.cell(r, 2).value
+        if c and isinstance(y, int):
+            cov.setdefault(c, set()).add(y)
+    for r in range(2, ws.max_row + 1):
+        note = RE_MISS.sub("", str(ws.cell(r, 12).value or ""))
+        miss = [y for y in COV_YEARS if y not in cov.get(ws.cell(r, 1).value, set(COV_YEARS))]
+        if miss:
+            note = (note + f" [Thiếu BCTN: {', '.join(map(str, miss))}]").strip()
+        ws.cell(r, 12).value = note
+    if "Thieu_BCTN" in wb.sheetnames:
+        del wb["Thieu_BCTN"]
+    wt = wb.create_sheet("Thieu_BCTN")
+    wt.append(CHD)
+    for c in sorted(cov):
+        miss = [y for y in COV_YEARS if y not in cov[c]]
+        wt.append([c, ", ".join(str(y) for y in sorted(cov[c])), ", ".join(map(str, miss)),
+                   ("Thiếu BCTN: " + ", ".join(map(str, miss))) if miss else "Đủ"])
+    build_summary(wb)
+
+
 # ---------- Chế độ API ----------
 PROMPT = """Bạn là trợ lý trích dữ liệu quản trị công ty từ Báo cáo thường niên của công ty niêm yết Việt Nam.
 Dưới đây là một khối "DÒNG NHẬN DIỆN" (các dòng có tên công ty/mã CK/năm) và text của các trang liên quan (mỗi trang bắt đầu bằng "=== TRANG n ===").
@@ -243,8 +335,9 @@ Quy tắc:
   appointed_date (ngày bắt đầu giữ chức trong nhiệm kỳ hiện tại; null nếu không nêu hoặc từ trước năm báo cáo),
   left_date (ngày miễn nhiệm/từ nhiệm; null nếu còn tại vị),
   reason (ngắn, nếu có thay đổi nhân sự),
-  independent (true nếu ở BẤT KỲ chỗ nào trong các trang người này được ghi rõ là "độc lập"; "không điều hành" mà không ghi "độc lập" thì false),
-  own_pct (tỷ lệ sở hữu cổ phần CÁ NHÂN, 5.76 nghĩa là 5,76%; 0 nếu ghi 0%; null nếu báo cáo không có số liệu; không cộng phần đại diện cho tổ chức).
+  independent (true CHỈ KHI người này là "Thành viên HĐQT độc lập" của CHÍNH công ty đang báo cáo, được ghi ở chức danh/danh sách HĐQT của công ty này. Chức vụ độc lập tại CÔNG TY KHÁC (trong phần lý lịch, quá trình công tác, chức vụ đang nắm giữ ở tổ chức khác) KHÔNG được tính; "không điều hành" mà không ghi "độc lập" thì false),
+  own_pct (tỷ lệ sở hữu cổ phần CÁ NHÂN đúng như BCTN in: nếu báo cáo đã làm tròn (lên hoặc xuống) thì GIỮ NGUYÊN số làm tròn đó, không tự tính lại từ số cổ phần; 5.76 nghĩa là 5,76%; 0 nếu ghi 0%; null nếu báo cáo không có tỷ lệ; không cộng phần đại diện cho tổ chức),
+  shares (SỐ LƯỢNG cổ phiếu cá nhân đang nắm giữ nếu báo cáo nêu, số nguyên, ví dụ 1.250.000 → 1250000; 0 nếu ghi 0 cổ phiếu; null nếu báo cáo không nêu số lượng. Không cộng cổ phần đại diện tổ chức).
   Việc loại người đã rời/chưa nhậm chức do chương trình tự tính từ appointed_date/left_date và ref_date, nên hãy điền ngày chính xác.
 - board_independent: nếu báo cáo nêu rõ số lượng (ví dụ "02 thành viên độc lập", "02/04 thành viên là độc lập") thì điền số đó (tại ngày tham chiếu); nếu không thì để null.
 - Công ty mô hình 1 tầng (không có BKS, có Ủy ban kiểm toán) → không liệt kê BKS.
@@ -266,11 +359,12 @@ SCHEMA = {
         "own_date": {"type": ["string", "null"], "description": "Ngày của số liệu sở hữu, dd/mm/yyyy"},
         "members": {"type": "array", "items": {"type": "object", "properties": {
             "name": {"type": "string"}, "body": {"type": "string", "enum": ["HDQT", "BKS"]},
-            "role": {"type": "string"}, "independent": {"type": "boolean"},
+            "role": {"type": "string"}, "independent": {"type": "boolean", "description": "true chỉ khi là TV HĐQT độc lập của chính công ty đang báo cáo, không phải công ty khác"},
             "own_pct": {"type": ["number", "null"]},
+            "shares": {"type": ["integer", "null"], "description": "Số cổ phiếu cá nhân nắm giữ, null nếu báo cáo không nêu"},
             "appointed_date": {"type": ["string", "null"]}, "left_date": {"type": ["string", "null"]},
             "reason": {"type": "string"}},
-            "required": ["name", "body", "role", "independent", "own_pct", "appointed_date", "left_date", "reason"]}},
+            "required": ["name", "body", "role", "independent", "own_pct", "shares", "appointed_date", "left_date", "reason"]}},
         "pages": {"type": "string", "description": "Các trang nguồn"},
         "note": {"type": "string", "description": "Ghi chú ngắn: thay đổi nhân sự, mâu thuẫn, thiếu số liệu"},
     },
@@ -296,14 +390,19 @@ def normalize(d: dict) -> dict:
 def call_claude(text: str) -> dict:
     import anthropic
     client = anthropic.Anthropic(max_retries=6)
-    msg = client.messages.create(
+    kw = dict(
         model=os.environ.get("CG_MODEL", "claude-haiku-5-5"),
         max_tokens=8000,
         tools=[{"name": "ghi_ket_qua", "description": "Ghi kết quả trích dữ liệu quản trị công ty",
                 "input_schema": SCHEMA}],
-        tool_choice={"type": "tool", "name": "ghi_ket_qua"},
         messages=[{"role": "user", "content": PROMPT + "\n\n" + text}],
     )
+    try:  # ép buộc gọi tool; một số model (vd. Sonnet 5.5) không hỗ trợ → chuyển sang auto
+        msg = client.messages.create(tool_choice={"type": "tool", "name": "ghi_ket_qua"}, **kw)
+    except anthropic.BadRequestError as e:
+        if "tool_choice" not in str(e):
+            raise
+        msg = client.messages.create(tool_choice={"type": "auto"}, **kw)
     for b in msg.content:
         if getattr(b, "type", "") == "tool_use":
             return normalize(dict(b.input))
@@ -346,10 +445,11 @@ def split_members(members, ref):
     keep, drop = [], []
     for m in members:
         rl = fold(m.get("role") or "").lower()
-        need = ("kiem soat", "bks") if m.get("body") == "BKS" else ("hdqt", "hoi dong quan tri", "chu tich", "thanh vien", "uy vien", "doc lap")
+        need = ("hdqt", "hoi dong quan tri", "chu tich", "thanh vien", "uy vien", "doc lap")
         exec_first = rl.startswith(("pho tong giam doc", "tong giam doc", "ke toan truong", "pho giam doc", "giam doc"))
         negated = bool(re.search(r"khong\s+(?:nen|phai|thuoc|duoc\s+nhac|ro|co\s+ten)", rl))
-        if exec_first or negated or not any(k in rl for k in need):
+        # BKS: nằm trong danh sách BKS là tính, không xét từ khóa chức danh (vd. "Thành viên chuyên trách")
+        if m.get("body") != "BKS" and (exec_first or negated or not any(k in rl for k in need)):
             drop.append((m, f"Chức vụ '{m.get('role')}' không thuộc {m.get('body')} (có thể là Ban điều hành)"))
             continue
         ap, lf = parse_date(m.get("appointed_date")), parse_date(m.get("left_date"))
@@ -418,11 +518,11 @@ def process_one(pdf: Path, seen: set):
     if mem:
         bt = len(mem)
         bi_calc = sum(1 for m in mem if m.get("independent"))
-        bi = bi_model if bi_model is not None else bi_calc
+        bi = bi_calc            # ai được gắn mác "độc lập" thì tính là độc lập; không dùng số model tự nêu
         if bt_model is not None and bt_model != bt:
             flags.append(f"Báo cáo nêu {bt_model} TV HĐQT, danh sách tại ngày tham chiếu có {bt} – kiểm tra")
         if bi_model is not None and bi_model != bi_calc:
-            flags.append(f"Báo cáo nêu {bi_model} TV độc lập nhưng chỉ xác định được {bi_calc} người ghi rõ độc lập – dùng số báo cáo nêu")
+            flags.append(f"Báo cáo nêu {bi_model} TV độc lập nhưng danh sách có {bi_calc} người gắn mác độc lập – dùng {bi_calc} – kiểm tra")
     else:
         bt, bi = bt_model, bi_model
     # Tổng tỷ lệ sở hữu cá nhân HĐQT (chỉ người còn tại vị)
@@ -437,15 +537,33 @@ def process_one(pdf: Path, seen: set):
     kt, kz = d.get("bks_total"), d.get("bks_zero")
     if bmem:
         kt = len(bmem)
-        if any(m.get("own_pct") is None for m in bmem):
-            miss = ", ".join(m.get("name", "?") for m in bmem if m.get("own_pct") is None)
-            flags.append(f"Báo cáo không công bố sở hữu của TV BKS: {miss} → BKS 0% để N/A (kiểm tra thủ công)")
+        # Quy tắc: tỷ lệ in ra là 0,00% → 0% (kể cả số CP khác 0, do làm tròn); tỷ lệ khác 0/không có
+        # mà báo cáo có số lượng CP → 0 CP mới là 0%; chỉ có tỷ lệ khác 0 → khác 0
+        def is_zero(m):
+            if m.get("own_pct") is not None and float(m["own_pct"]) == 0:
+                return True
+            if m.get("shares") is not None:
+                return int(m["shares"]) == 0
+            if m.get("own_pct") is not None:
+                return False
+            return None
+        unk = [m for m in bmem if is_zero(m) is None]
+        if unk:
+            flags.append("Báo cáo không công bố sở hữu của TV BKS: " + ", ".join(m.get("name", "?") for m in unk) +
+                         " → BKS 0% để N/A (kiểm tra thủ công)")
             kz = None
         else:
-            kz = sum(1 for m in bmem if float(m["own_pct"]) == 0)
+            kz = sum(1 for m in bmem if is_zero(m))
     # ---- Người bị loại ----
     for m, why in dropped:
         flags.append(f"Loại {m.get('name','?')} ({m.get('body')}): {why}")
+    # ---- Mọi người có ngày bổ nhiệm/miễn nhiệm (kể cả còn tại vị) để người dùng tự xem xét ----
+    dated = [f"{m.get('name','?')} ({m.get('body')}"
+             + (f", bổ nhiệm {m['appointed_date']}" if m.get("appointed_date") else "")
+             + (f", miễn nhiệm {m['left_date']}" if m.get("left_date") else "") + ")"
+             for m in members if m.get("appointed_date") or m.get("left_date")]
+    if dated:
+        flags.append("CẦN XEM – có ngày bổ nhiệm/miễn nhiệm: " + "; ".join(dated))
 
     # Dữ liệu cho sheet thành viên
     mrows = []
@@ -456,7 +574,7 @@ def process_one(pdf: Path, seen: set):
                       "Có" if m.get("independent") else "Không",
                       (m["own_pct"] / 100) if isinstance(m.get("own_pct"), (int, float)) else "N/A",
                       m.get("appointed_date") or "", m.get("left_date") or "", f"{ref:%d/%m/%Y}" if ref else "",
-                      "Có" if id(m) in kept_ids else "KHÔNG", why or (m.get("reason") or ""), pdf.name])
+                      "Có" if id(m) in kept_ids else "KHÔNG", (why or (m.get("reason") or "")) + (f" | SL CP: {m['shares']:,}" if isinstance(m.get("shares"), int) else ""), pdf.name])
 
     ined = round(bi / bt, 4) if bt and bi is not None else "N/A"
     pbks = round(kz / kt, 4) if kt and kz is not None else "N/A"
@@ -478,7 +596,7 @@ def mode_api(in_dirs, out_xlsx: Path):
     from openpyxl import Workbook, load_workbook
     from openpyxl.styles import PatternFill
     if out_xlsx.exists():
-        wb = load_workbook(out_xlsx); ws = wb.active
+        wb = load_workbook(out_xlsx); ws = wb["CG_data"]   # sheet đầu tiên giờ là Tong_hop
         for row in range(ws.max_row, 1, -1):   # xoá dòng lỗi lần trước để chạy lại
             if str(ws.cell(row, 12).value or "").startswith(ERR_PREFIX):
                 fname = ws.cell(row, 14).value
@@ -500,6 +618,7 @@ def mode_api(in_dirs, out_xlsx: Path):
 
     pdfs = list_pdfs(in_dirs)
     print(f"{len(pdfs)} file PDF, {len([p for p in pdfs if p.name in done])} đã có trong Excel")
+    print_coverage([p.name for p in pdfs])          # quét thử trước: công ty nào thiếu năm nào
     for pdf in pdfs:
         if pdf.name in done:
             continue
@@ -523,6 +642,8 @@ def mode_api(in_dirs, out_xlsx: Path):
                     c.fill = PatternFill("solid", fgColor="FFF2CC")
         wb.save(out_xlsx)
         print(f"{pdf.name} → {row[0]} {row[1]}: {summary}")
+    apply_coverage(wb)
+    wb.save(out_xlsx)
 
 
 if __name__ == "__main__":

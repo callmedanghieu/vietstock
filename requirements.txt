@@ -4,3 +4,4 @@ openpyxl
 anthropic
 pdf2image
 pytesseract
+python-dotenv
