@@ -10,7 +10,7 @@
 | BKS = nằm trong BKS | `split_members` không lọc chức danh với BKS (vd. "Thành viên chuyên trách"), chỉ lọc theo ngày |
 | Liệt kê hết người có ngày bổ nhiệm/miễn nhiệm | Ghi chú `[CẦN XEM ...]` + sheet `Thanh_vien`; Simba tự xem xét |
 | Sở hữu cá nhân, không cộng phần đại diện | Prompt + `own_pct` |
-| BKS 0%: tỷ lệ in ra là 0,00% → 0% (kể cả số CP khác 0); không thì có số CP → 0 CP mới là 0%; chỉ có tỷ lệ khác 0 → khác 0 | `is_zero` trong `process_one`: xét `own_pct`==0 trước, rồi `shares` |
+| BKS 0%: ưu tiên số CP cá nhân (≠0 → khác 0%, =0 → 0%); không có số CP mới dùng tỷ lệ cá nhân (0/0,00 → 0%; 0,000…1 → khác 0); không có cả hai → N/A tô vàng. Không lấy sở hữu đại diện | `is_zero` trong `process_one`: xét `shares` trước, rồi `own_pct` |
 | BKS không công bố sở hữu (không có cả số CP lẫn tỷ lệ) → N/A | `process_one`: có TV BKS không xác định được → `kz = None` |
 | Sở hữu HĐQT: BCTN đã làm tròn thì lấy đúng số làm tròn | Prompt `own_pct`; tổng = cộng các số đó, không tính lại từ số CP |
 | Số liệu tính lại bằng code | Tổng % HĐQT = tổng `own_pct` người còn tại vị; BKS 0% đếm từ danh sách |

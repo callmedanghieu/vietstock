@@ -8,6 +8,23 @@ python cg_extract.py api  --in .\bctn --out .\ket_qua_local.xlsx
 ```
 Chạy lại với cùng `--out`: file đã có dòng hợp lệ được bỏ qua, dòng lỗi được chạy lại. Có thể truyền nhiều thư mục: `--in .\bctn .\bctn_release`.
 
+### Chạy toàn bộ `bctn/` trên máy, chia 4 tiến trình song song
+Dự án nằm ở `D:\KLTN\vietstock` (đã chuyển khỏi OneDrive). Mở terminal rồi:
+```powershell
+cd D:\KLTN\vietstock
+$n=4; $files=Get-ChildItem bctn\*.pdf | Sort-Object Name; for($i=0;$i -lt $files.Count;$i++){ $d="parts\part$($i % $n)"; New-Item -ItemType Directory -Force $d | Out-Null; New-Item -ItemType HardLink -Path "$d\$($files[$i].Name)" -Target $files[$i].FullName | Out-Null }
+```
+Mở 4 cửa sổ terminal, mỗi cửa sổ chạy một phần (đổi `0` thành `1`, `2`, `3`):
+```powershell
+cd D:\KLTN\vietstock; .\.venv\Scripts\Activate.ps1; $env:PYTHONIOENCODING="utf-8"
+python cg_extract.py api --in parts\part0 --out kq0.xlsx --no-coverage
+```
+Khi cả 4 xong, gộp và tính thiếu BCTN:
+```powershell
+python cg_tools.py merge --target ket_qua_full.xlsx --inputs kq0.xlsx kq1.xlsx kq2.xlsx kq3.xlsx
+```
+Dừng giữa chừng rồi chạy lại đúng lệnh thì file đã xong được bỏ qua. `parts/`, `kq*.xlsx`, `ket_qua_full.xlsx` đã nằm trong `.gitignore`. Muốn gộp vào repo: `git pull`, rồi `merge --target ket_qua.xlsx` với các file `kq*.xlsx`.
+
 ## B. Chạy trên GitHub (khối lượng lớn)
 1. Releases → Draft a new release, tag ví dụ `dot-01`, đính kèm ~300–400 PDF, Publish.
 2. Actions tự chạy: 8 shard song song → job `merge` commit `ket_qua.xlsx`.

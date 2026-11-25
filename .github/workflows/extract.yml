@@ -86,7 +86,7 @@ jobs:
       - name: Chạy trích dữ liệu
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python cg_extract.py api --in work --out shard_${{ matrix.shard }}.xlsx
+        run: python cg_extract.py api --in work --out shard_${{ matrix.shard }}.xlsx --no-coverage
 
       - name: Lưu kết quả của shard
         if: always()

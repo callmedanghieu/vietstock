@@ -28,7 +28,8 @@ Trên Windows đặt `$env:PYTHONIOENCODING="utf-8"` khi in tiếng Việt ra co
 - BKS = ai nằm trong BKS là tính (kể cả "Thành viên chuyên trách"), không lọc theo từ khóa chức danh; chỉ loại theo ngày miễn nhiệm/bổ nhiệm.
 - Mỗi công ty cần đủ BCTN 2019–2025. Quét trước bằng `python cg_tools.py check --dir bctn` (`api` cũng tự in báo cáo này). Năm thiếu được ghi `[Thiếu BCTN: ...]` cuối cột Ghi chú và liệt kê ở sheet `Thieu_BCTN`.
 - Mọi người có ngày bổ nhiệm/miễn nhiệm được liệt kê ở Ghi chú (`[CẦN XEM ...]`) và sheet `Thanh_vien` để Simba tự xem xét.
-- Sở hữu BKS 0%: tỷ lệ in ra là 0,00% → ghi nhận 0% (kể cả khi số CP khác 0); nếu không có tỷ lệ 0,00% mà có số lượng CP → 0 CP mới là 0%, khác 0 là khác 0%; chỉ có tỷ lệ khác 0 → khác 0. Không có cả hai → N/A (không coi là 0).
+- Sở hữu BKS 0%: ưu tiên SỐ CỔ PHIẾU cá nhân (khác 0 → khác 0%; = 0 → 0%). Chỉ khi BCTN không nêu số CP mới dùng tỷ lệ cá nhân: 0 / 0,00 (làm tròn xuống) → 0%; 0,000…1 → khác 0. Không có cả hai → N/A (tô vàng). Chỉ lấy sở hữu CÁ NHÂN, không lấy tỷ lệ/số CP đại diện (vốn nhà nước, tổ chức). Chỉ có số CP (không có %) → quy đổi bằng số CP lưu hành.
+- Chọn trang: chấm điểm từ khóa trên TOÀN file (cách chính xác nhất, đã đối chiếu BSR 2022, BID 2019). Mục lục (5 trang đầu, có số trang) chỉ dùng để ƯU TIÊN: trang thuộc mục HĐQT/BKS/Quản trị công ty/Quản trị doanh nghiệp được cộng điểm và được OCR trước; chọn được < 5 trang liên quan thì OCR nốt các trang scan còn lại. Không tìm được trang nào → N/A tô vàng. Trang có font lỗi `(cid:..)` cũng được OCR.
 - Sở hữu HĐQT: BCTN làm tròn (lên hoặc xuống) thì lấy đúng số đã làm tròn.
 - Tổng % HĐQT và số BKS 0% do code tính lại từ danh sách thành viên, không tin số model tự cộng.
 - Phó TGĐ, Kế toán trưởng (Ban điều hành) không tính vào HĐQT. PDF scan phải OCR.

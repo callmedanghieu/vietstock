@@ -6,3 +6,17 @@ slim/
 ket_qua_local.xlsx
 run.log
 bctn/*.pdf
+parts/
+test3/
+ket_qua_test3.xlsx
+kq*.xlsx
+ket_qua_full.xlsx
+tessdata/
+test_fix/
+test_out.txt
+test_err.txt
+parts10/
+ket_qua_10ma.xlsx
+parts100/
+run100_*.txt
+run11_*.txt

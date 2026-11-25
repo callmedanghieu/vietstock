@@ -13,7 +13,7 @@ cg_tools.py — công cụ phụ cho workflow chạy song song (chia shard + g�
 import argparse, json, sys
 from pathlib import Path
 
-from cg_extract import ERR_PREFIX, HDR, MHDR, apply_coverage, print_coverage
+from cg_extract import ERR_PREFIX, HDR, MHDR, apply_coverage, highlight_na, print_coverage
 
 
 def done_files(xlsx: Path):
@@ -65,6 +65,7 @@ def fmt_row(ws, kind):
         for c in ws[row]:
             if c.column in (5, 8, 9) and isinstance(c.value, float):
                 c.number_format = "0.00%"
+        highlight_na([c for c in ws[row] if c.column in (5, 8, 9)])
     else:
         if isinstance(ws.cell(row, 7).value, float):
             ws.cell(row, 7).number_format = "0.00%"

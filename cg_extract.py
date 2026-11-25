@@ -30,6 +30,10 @@ KW_STRONG = [  # mỗi hit = 3 điểm
     "tỷ lệ sở hữu cổ phần", "sở hữu cổ phần", "số cổ phần sở hữu", "cổ phần nắm giữ",
     "thành viên độc lập", "thành viên hđqt độc lập", "độc lập hội đồng quản trị",
     "trưởng ban kiểm soát", "thành viên ban kiểm soát",
+    "danh sách thành viên hội đồng quản trị", "danh sách thành viên hđqt", "thành viên hội đồng quản trị",
+    "số cổ phiếu sở hữu", "cổ phiếu sở hữu", "số lượng cổ phiếu", "cổ phiếu đang lưu hành", "cổ phiếu lưu hành",
+    "thành viên không điều hành", "danh sách hội đồng quản trị", "danh sách hđqt", "danh sách ban kiểm soát",
+    "danh sách thành viên ban kiểm soát", "chức vụ: thành viên hđqt", "chức vụ: chủ tịch hđqt",
 ]
 KW_WEAK = [    # mỗi hit = 1 điểm
     "hội đồng quản trị", "ban kiểm soát", "chủ tịch hđqt", "phó chủ tịch",
@@ -37,7 +41,7 @@ KW_WEAK = [    # mỗi hit = 1 điểm
 ]
 KW_NEG = ["kiểm toán độc lập", "ý kiến kiểm toán", "lưu chuyển tiền tệ", "thuyết minh báo cáo tài chính"]
 
-MAX_PAGES = 12      # số trang tối đa giữ lại cho mỗi báo cáo
+MAX_PAGES = 16     # số trang tối đa giữ lại cho mỗi báo cáo
 MIN_SCORE = 4       # điểm tối thiểu để giữ trang
 OCR_DPI = 200
 
@@ -51,22 +55,97 @@ def norm(s: str) -> str:
 
 # ---------- Đọc PDF (có OCR cho trang scan) ----------
 def ocr_page(args) -> str:
-    pdf_path, pageno = args
+    pdf_path, pageno = args[0], args[1]
+    dpi = args[2] if len(args) > 2 else OCR_DPI
     try:
         from pdf2image import convert_from_path
         import pytesseract, shutil
         win = r"C:\Program Files\Tesseract-OCR\tesseract.exe"   # cài bằng installer Windows thường không vào PATH
         if not shutil.which("tesseract") and os.path.exists(win):
             pytesseract.pytesseract.tesseract_cmd = win
-        img = convert_from_path(str(pdf_path), dpi=OCR_DPI, first_page=pageno, last_page=pageno)[0]
-        return pytesseract.image_to_string(img, lang="vie+eng")
+        img = convert_from_path(str(pdf_path), dpi=dpi, first_page=pageno, last_page=pageno)[0]
+        return pytesseract.image_to_string(img, lang="vie+eng" if dpi >= 150 else "eng")
     except Exception as e:  # không có tesseract → bỏ qua, báo ra stderr
         print(f"  [OCR bỏ qua trang {pageno}: {e}]", file=sys.stderr)
         return ""
 
 
+OCR_FULL_BELOW = 15   # file có ≤ chừng này trang scan thì OCR hết, không cần khoanh vùng
+TOC_PAGES = 5         # chỉ OCR/đọc 5 trang đầu để tìm mục lục
+SEC_PAD = 6           # nới mỗi đầu thêm ngần này trang (số trang in ≠ số trang PDF)
+RE_SEC = re.compile(r"hội đồng quản trị|hđqt|ban kiểm soát|quản trị công ty|quản trị doanh nghiệp")   # từ khóa mục cần quét trong mục lục
+
+
+def ocr_pages(pdf_path: Path, texts, idxs, dpi=None, label="OCR"):
+    if not idxs:
+        return
+    print(f"  {label} {len(idxs)}/{len(texts)} trang...", file=sys.stderr)
+    from concurrent.futures import ProcessPoolExecutor
+    nw = int(os.environ.get("CG_OCR_WORKERS") or (os.cpu_count() or 1))
+    with ProcessPoolExecutor(max_workers=max(1, nw)) as ex:
+        for i, t in zip(idxs, ex.map(ocr_page, [(pdf_path, i + 1, dpi or OCR_DPI) for i in idxs])):
+            texts[i] = t
+
+
+
+
+SEC_MAX = 20         # tối đa số trang của mỗi mục (tính từ trang bắt đầu trong mục lục)
+SEC_END_PAD = 4      # số trang in ≠ số trang PDF (bìa, lời nói đầu…) → nới thêm ở cuối mục
+
+
+def toc_sections(texts, n_pages):
+    """Đọc mục lục (TOC_PAGES trang đầu): lấy các mục có chữ HĐQT / BKS / Quản trị công ty / Quản trị doanh nghiệp KÈM số
+    trang. Trả về list (số trang in, tiêu đề, [chỉ số trang PDF]) theo thứ tự số trang tăng dần. Mục có chữ nhưng không kèm
+    số trang thì bị bỏ qua."""
+    lines = [norm(l).strip() for t in texts[:TOC_PAGES] for l in (t or "").splitlines()]
+    num_first = sum(1 for l in lines if re.match(r"\d{1,3}\b(?!\s*[%/])", l))
+    num_last = sum(1 for l in lines if re.search(r"(?<!\d)\d{1,3}$", l))
+    style_first = num_first > num_last          # mục lục viết "28 Tiêu đề" (số trước) hay "Tiêu đề 28" (số sau)
+    entries = []
+    for l in lines:
+        parts = re.split(r"(?<![\d,./])(\d{1,3})\.?(?![\d,%/])", l)   # [text0, num1, text1, num2, text2, ...]
+        txt, num = parts[0::2], parts[1::2]
+        for k, nm in enumerate(num):
+            title = (txt[k + 1] if style_first else txt[k]).strip(" .…·_-:")
+            if len(title) >= 4 and re.search(r"[a-zà-ỹ]{3}", title):
+                entries.append((int(nm), title))
+    nums = sorted({p for p, _ in entries})
+    maxp = max([p for p in nums if p <= 600] or [0])
+    f = 2 if maxp > 1.4 * n_pages else 1        # bản in 2 trang/1 trang PDF (số trang in ≈ 2 × số trang PDF)
+
+    def idx(p):                                 # số trang in → chỉ số trang PDF (ước lượng; nới biên khi quét)
+        return int(round((p - 1) / f))
+
+    out, seen = [], set()
+    for p, title in sorted(entries):
+        if (not RE_SEC.search(title) or not (1 <= idx(p) < n_pages) or p in seen
+                or re.search(r"thông điệp|thư ngỏ|lời ngỏ|lời nói đầu|đánh giá|kế hoạch|định hướng|giao dịch|thù lao|"
+                             r"báo cáo của ban (?:tổng|giám)", title)):
+            continue
+        seen.add(p)
+        nxt = next((q for q in nums if q > p), p + SEC_MAX * f)
+        a = idx(p)
+        b = max(min(idx(nxt), a + SEC_MAX), a + 3)
+        idxs = list(range(max(a - 2, 0), min(b + SEC_END_PAD, n_pages)))
+        out.append((p, title, idxs))
+    return out
+
+
+def no_text(t: str) -> bool:
+    """Trang không có chữ dùng được: trống/ngắn (scan) hoặc font lỗi mã hóa '(cid:..)'."""
+    return len((t or "").strip()) < 40 or (t or "").count("(cid:") >= 10
+
+
+PREFER_BONUS = 4      # trang nằm trong mục HĐQT/BKS/Quản trị công ty của mục lục được cộng điểm ưu tiên
+RESCAN_BELOW = 5      # chọn được ít hơn chừng này trang liên quan → OCR nốt các trang scan còn lại
+
+
 def page_texts(pdf_path: Path):
-    """Trả về list text từng trang; OCR (song song) những trang không có text layer."""
+    """Trả về (texts, prefer, pending).
+    - texts: text từng trang (text layer; trang scan / font lỗi thì OCR).
+    - prefer: tập trang thuộc các mục HĐQT/BKS/Quản trị công ty theo MỤC LỤC (chỉ để ưu tiên + quyết định OCR trước).
+    - pending: trang scan chưa OCR (ngoài prefer); chỉ OCR nếu bước chọn trang bằng từ khóa không đủ.
+    File ít trang scan (≤ OCR_FULL_BELOW) thì OCR hết ngay."""
     import pdfplumber
     texts = []
     with pdfplumber.open(str(pdf_path)) as pdf:
@@ -75,14 +154,22 @@ def page_texts(pdf_path: Path):
                 texts.append(p.extract_text() or "")
             except Exception:
                 texts.append("")
-    need = [i for i, t in enumerate(texts) if len(t.strip()) < 40]
-    if need:
-        print(f"  OCR {len(need)}/{len(texts)} trang...", file=sys.stderr)
-        from concurrent.futures import ProcessPoolExecutor
-        with ProcessPoolExecutor(max_workers=max(1, os.cpu_count() or 1)) as ex:
-            for i, t in zip(need, ex.map(ocr_page, [(pdf_path, i + 1) for i in need])):
-                texts[i] = t
-    return texts
+    blank = [i for i, t in enumerate(texts) if no_text(t)]
+    ocr_pages(pdf_path, texts, [i for i in blank if i < TOC_PAGES])            # 5 trang đầu: đọc mục lục
+    prefer = {i for _, _, idxs in toc_sections(texts, len(texts)) for i in idxs}
+    rest = [i for i in blank if i >= TOC_PAGES]
+    if len(rest) <= OCR_FULL_BELOW:
+        ocr_pages(pdf_path, texts, rest)
+        return texts, prefer, []
+    first = [i for i in rest if i in prefer]
+    if first:
+        print(f"  (mục lục: ưu tiên OCR {len(first)}/{len(rest)} trang scan)", file=sys.stderr)
+        ocr_pages(pdf_path, texts, first)
+    else:
+        print("  (mục lục không cho vị trí → OCR toàn bộ)", file=sys.stderr)
+        ocr_pages(pdf_path, texts, rest)
+        return texts, prefer, []
+    return texts, prefer, [i for i in rest if i not in prefer]
 
 
 # ---------- Chọn trang ----------
@@ -97,9 +184,15 @@ def score_page(t: str) -> int:
     return s
 
 
-def select_pages(texts):
-    scored = [(score_page(t), i) for i, t in enumerate(texts)]
-    keep = sorted([i for s, i in scored if s >= MIN_SCORE], key=lambda i: -scored[i][0])[:MAX_PAGES]
+def select_pages(texts, prefer=None):
+    """Chọn trang liên quan bằng từ khóa trên TOÀN file; trang thuộc mục ưu tiên của mục lục được cộng điểm."""
+    scored = []
+    for i, t in enumerate(texts):
+        sc = score_page(t)
+        if sc > 0 and prefer and i in prefer:
+            sc += PREFER_BONUS
+        scored.append((sc, i))
+    keep = sorted([i for sc, i in scored if sc >= MIN_SCORE], key=lambda i: -scored[i][0])[:MAX_PAGES]
     return sorted(keep)
 
 
@@ -206,8 +299,11 @@ def mode_slim(in_dirs, out_dir: Path):
     from pypdf import PdfReader, PdfWriter
     out_dir.mkdir(parents=True, exist_ok=True)
     for pdf in list_pdfs(in_dirs):
-        texts = page_texts(pdf)
-        pages = select_pages(texts)
+        texts, prefer, pending = page_texts(pdf)
+        pages = select_pages(texts, prefer)
+        if len(pages) < RESCAN_BELOW and pending:
+            ocr_pages(pdf, texts, pending)
+            pages = select_pages(texts, prefer)
         if not pages:
             print(f"{pdf.name}: KHÔNG tìm được trang phù hợp (file scan? kiểm tra lại)")
             continue
@@ -263,6 +359,15 @@ SGROUPS = ["% INED", "% BKS không sở hữu cổ phần", "Tổng % sở hữu
 SHDR = ["Mã CK"] + [f"{g} {y}" for g in SGROUPS for y in COV_YEARS]
 
 
+def highlight_na(cells):
+    """Tô vàng các ô 'N/A' (3 chỉ tiêu chính) để người dùng tự kiểm tra."""
+    from openpyxl.styles import PatternFill
+    fill = PatternFill("solid", fgColor="FFFF00")
+    for c in cells:
+        if c.value == "N/A":
+            c.fill = fill
+
+
 def build_summary(wb):
     """Sheet chính 'Tong_hop': mỗi công ty một dòng; cột = % INED / % BKS không sở hữu / Tổng % sở hữu HĐQT theo từng năm
     2019-2025. Năm thiếu BCTN → ô để trống. Mọi thông tin khác (tổng TV, ghi chú, cảnh báo, trang nguồn) ở sheet phụ
@@ -291,6 +396,7 @@ def build_summary(wb):
         for cell in wt[wt.max_row][1:]:
             if isinstance(cell.value, float):
                 cell.number_format = "0.00%"
+        highlight_na(wt[wt.max_row][1:])
     for j in range(2, len(SHDR) + 1):
         wt.column_dimensions[get_column_letter(j)].width = 12
     wt.freeze_panes = "B2"
@@ -336,8 +442,11 @@ Quy tắc:
   left_date (ngày miễn nhiệm/từ nhiệm; null nếu còn tại vị),
   reason (ngắn, nếu có thay đổi nhân sự),
   independent (true CHỈ KHI người này là "Thành viên HĐQT độc lập" của CHÍNH công ty đang báo cáo, được ghi ở chức danh/danh sách HĐQT của công ty này. Chức vụ độc lập tại CÔNG TY KHÁC (trong phần lý lịch, quá trình công tác, chức vụ đang nắm giữ ở tổ chức khác) KHÔNG được tính; "không điều hành" mà không ghi "độc lập" thì false),
-  own_pct (tỷ lệ sở hữu cổ phần CÁ NHÂN đúng như BCTN in: nếu báo cáo đã làm tròn (lên hoặc xuống) thì GIỮ NGUYÊN số làm tròn đó, không tự tính lại từ số cổ phần; 5.76 nghĩa là 5,76%; 0 nếu ghi 0%; null nếu báo cáo không có tỷ lệ; không cộng phần đại diện cho tổ chức),
-  shares (SỐ LƯỢNG cổ phiếu cá nhân đang nắm giữ nếu báo cáo nêu, số nguyên, ví dụ 1.250.000 → 1250000; 0 nếu ghi 0 cổ phiếu; null nếu báo cáo không nêu số lượng. Không cộng cổ phần đại diện tổ chức).
+  own_pct (tỷ lệ sở hữu cổ phần CÁ NHÂN đúng như BCTN in: nếu báo cáo đã làm tròn (lên hoặc xuống) thì GIỮ NGUYÊN số làm tròn đó, không tự tính lại từ số cổ phần; 5.76 nghĩa là 5,76%; ghi 0 CHỈ KHI báo cáo in đúng "0" / "0%" / "0,00%" (làm tròn xuống); tỷ lệ in rất nhỏ khác 0 (vd 0,00025%) thì giữ đúng giá trị đó; dạng "0,000…1" (chữ số cuối khác 0, kể cả bị lược bằng dấu chấm) là KHÁC 0 → ghi số dương rất nhỏ (đọc được thì ghi đúng, không thì 0.0001); null nếu báo cáo không có tỷ lệ SỞ HỮU CÁ NHÂN.
+    TUYỆT ĐỐI KHÔNG lấy tỷ lệ "đại diện sở hữu", "đại diện vốn", "đại diện phần vốn nhà nước/của tổ chức", "sở hữu của Nhà nước/tập đoàn" làm own_pct: đó không phải sở hữu cá nhân. Bảng có cả cột "đại diện" lẫn cột "cá nhân" thì chỉ lấy cột cá nhân; bảng chỉ có cột đại diện thì own_pct = null),
+  shares (SỐ LƯỢNG cổ phiếu CÁ NHÂN đang nắm giữ nếu báo cáo nêu, số nguyên, ví dụ 1.250.000 → 1250000; 0 nếu ghi 0 cổ phiếu; null nếu báo cáo không nêu số lượng. Không cộng cổ phần đại diện tổ chức/Nhà nước).
+- shares_outstanding: tổng số cổ phiếu ĐANG LƯU HÀNH của công ty (số nguyên) theo báo cáo; không thấy → null.
+- Chỉ liệt kê người có tên được in trong text; text OCR lỗi/không đọc được thì KHÔNG tự suy ra hay bịa thành viên, để thiếu và ghi vào note.
   Việc loại người đã rời/chưa nhậm chức do chương trình tự tính từ appointed_date/left_date và ref_date, nên hãy điền ngày chính xác.
 - board_independent: nếu báo cáo nêu rõ số lượng (ví dụ "02 thành viên độc lập", "02/04 thành viên là độc lập") thì điền số đó (tại ngày tham chiếu); nếu không thì để null.
 - Công ty mô hình 1 tầng (không có BKS, có Ủy ban kiểm toán) → không liệt kê BKS.
@@ -356,6 +465,7 @@ SCHEMA = {
         "bks_total": {"type": ["integer", "null"]},
         "bks_zero": {"type": ["integer", "null"]},
         "board_own_pct": {"type": ["number", "null"], "description": "6.56 nghĩa là 6,56%"},
+        "shares_outstanding": {"type": ["integer", "null"], "description": "Tổng số cổ phiếu đang lưu hành của công ty"},
         "own_date": {"type": ["string", "null"], "description": "Ngày của số liệu sở hữu, dd/mm/yyyy"},
         "members": {"type": "array", "items": {"type": "object", "properties": {
             "name": {"type": "string"}, "body": {"type": "string", "enum": ["HDQT", "BKS"]},
@@ -369,7 +479,7 @@ SCHEMA = {
         "note": {"type": "string", "description": "Ghi chú ngắn: thay đổi nhân sự, mâu thuẫn, thiếu số liệu"},
     },
     "required": ["ticker", "year", "ref_date", "board_total", "board_independent", "bks_total", "bks_zero",
-                 "board_own_pct", "own_date", "members", "pages", "note"],
+                 "board_own_pct", "shares_outstanding", "own_date", "members", "pages", "note"],
 }
 
 
@@ -467,13 +577,17 @@ def split_members(members, ref):
 def process_one(pdf: Path, seen: set):
     """Trả về (row, summary). Ném exception nếu lỗi nặng (caller ghi dòng LỖI)."""
     code_f, year_f = parse_name(pdf)
-    texts = page_texts(pdf)
+    texts, prefer, pending = page_texts(pdf)
+    pages = select_pages(texts, prefer)
+    if pending and len(pages) < RESCAN_BELOW:     # khoanh theo mục lục chưa đủ → OCR nốt các trang scan còn lại
+        print("  (chưa đủ trang liên quan → OCR nốt các trang còn lại)", file=sys.stderr)
+        ocr_pages(pdf, texts, pending)
+        pages = select_pages(texts, prefer)
     code_d, year_d, c_strong, y_strong, id_lines = detect_identity(texts)
-    pages = select_pages(texts)
     process_one.last_members = []
     if not pages:
-        return ([code_d or code_f or pdf.stem[:3].upper(), year_d or year_f] + ["N/A"] * 7 +
-                ["", "", "Không tìm được trang phù hợp (file scan chưa OCR được? kiểm tra lại)", "", pdf.name],
+        return ([code_f or code_d or pdf.stem[:3].upper(), year_f or year_d] + ["N/A"] * 7 +
+                ["", "", "[Không tìm được trang HĐQT/BKS/sở hữu trong báo cáo → N/A toàn bộ năm, kiểm tra thủ công]", "", pdf.name],
                 "không có trang phù hợp")
     blob = "=== DÒNG NHẬN DIỆN CÔNG TY / NĂM (trích từ phần đầu báo cáo) ===\n" + "\n".join(id_lines)
     blob += "\n\n" + "\n\n".join(f"=== TRANG {i+1} ===\n{texts[i]}" for i in pages)
@@ -509,6 +623,20 @@ def process_one(pdf: Path, seen: set):
         ref = dt.date(int(year), 12, 31)
         flags.append(f"Không xác định được ngày tham chiếu → dùng 31/12/{year}")
     members = d.get("members") or []
+    # Báo cáo chỉ công bố số cổ phần cá nhân (không có tỷ lệ) → số cổ phần / số cổ phiếu lưu hành
+    so = d.get("shares_outstanding")
+    conv, noconv = [], []
+    for m in members:
+        if m.get("own_pct") is None and isinstance(m.get("shares"), (int, float)):
+            if isinstance(so, (int, float)) and so > 0:
+                m["own_pct"] = round(m["shares"] / so * 100, 4)
+                conv.append(m.get("name", "?"))
+            else:
+                noconv.append(m.get("name", "?"))
+    if conv:
+        flags.append(f"Quy đổi số cổ phần → tỷ lệ (chia {int(so):,} cổ phiếu lưu hành): " + ", ".join(conv))
+    if noconv:
+        flags.append("Có số cổ phần nhưng không thấy số cổ phiếu lưu hành để quy đổi: " + ", ".join(noconv))
     in_office, dropped = split_members(members, ref)
     bmem = [m for m in in_office if m.get("body") == "BKS"]
     mem = [m for m in in_office if m.get("body") == "HDQT"]
@@ -540,12 +668,13 @@ def process_one(pdf: Path, seen: set):
         # Quy tắc: tỷ lệ in ra là 0,00% → 0% (kể cả số CP khác 0, do làm tròn); tỷ lệ khác 0/không có
         # mà báo cáo có số lượng CP → 0 CP mới là 0%; chỉ có tỷ lệ khác 0 → khác 0
         def is_zero(m):
-            if m.get("own_pct") is not None and float(m["own_pct"]) == 0:
-                return True
+            # Ưu tiên SỐ CỔ PHIẾU cá nhân: khác 0 → khác 0%; bằng 0 → 0%.
             if m.get("shares") is not None:
                 return int(m["shares"]) == 0
+            # Báo cáo không nêu số cổ phiếu → dùng tỷ lệ cá nhân: 0 / 0,00 (làm tròn xuống) → 0%; có giá trị dương
+            # (kể cả 0,000…1) → khác 0.
             if m.get("own_pct") is not None:
-                return False
+                return float(m["own_pct"]) == 0
             return None
         unk = [m for m in bmem if is_zero(m) is None]
         if unk:
@@ -592,7 +721,7 @@ def process_one(pdf: Path, seen: set):
         (f" | {len(flags)} cảnh báo" if flags else "")
 
 
-def mode_api(in_dirs, out_xlsx: Path):
+def mode_api(in_dirs, out_xlsx: Path, coverage=True):
     from openpyxl import Workbook, load_workbook
     from openpyxl.styles import PatternFill
     if out_xlsx.exists():
@@ -618,7 +747,8 @@ def mode_api(in_dirs, out_xlsx: Path):
 
     pdfs = list_pdfs(in_dirs)
     print(f"{len(pdfs)} file PDF, {len([p for p in pdfs if p.name in done])} đã có trong Excel")
-    print_coverage([p.name for p in pdfs])          # quét thử trước: công ty nào thiếu năm nào
+    if coverage:                                    # quét thử trước: công ty nào thiếu năm nào (shard chỉ thấy 1/8 file nên tắt)
+        print_coverage([p.name for p in pdfs])
     for pdf in pdfs:
         if pdf.name in done:
             continue
@@ -633,6 +763,7 @@ def mode_api(in_dirs, out_xlsx: Path):
         for c in ws[ws.max_row]:
             if c.column in (5, 8, 9) and isinstance(c.value, float):
                 c.number_format = "0.00%"
+        highlight_na([c for c in ws[ws.max_row] if c.column in (5, 8, 9)])
         for mr in getattr(process_one, "last_members", []):
             wm.append(mr)
             if isinstance(mr[6], float):
@@ -642,8 +773,9 @@ def mode_api(in_dirs, out_xlsx: Path):
                     c.fill = PatternFill("solid", fgColor="FFF2CC")
         wb.save(out_xlsx)
         print(f"{pdf.name} → {row[0]} {row[1]}: {summary}")
-    apply_coverage(wb)
-    wb.save(out_xlsx)
+    if coverage:
+        apply_coverage(wb)
+        wb.save(out_xlsx)
 
 
 if __name__ == "__main__":
@@ -651,5 +783,10 @@ if __name__ == "__main__":
     ap.add_argument("mode", choices=["slim", "api"])
     ap.add_argument("--in", dest="inp", nargs="+", required=True, help="thư mục chứa PDF BCTN (một hoặc nhiều)")
     ap.add_argument("--out", required=True, help="slim: thư mục xuất; api: file .xlsx")
+    ap.add_argument("--no-coverage", action="store_true",
+                    help="api: bỏ quét thiếu BCTN (dùng cho shard; bước merge tính trên toàn bộ ket_qua.xlsx)")
     a = ap.parse_args()
-    (mode_slim if a.mode == "slim" else mode_api)(a.inp, Path(a.out))
+    if a.mode == "slim":
+        mode_slim(a.inp, Path(a.out))
+    else:
+        mode_api(a.inp, Path(a.out), coverage=not a.no_coverage)
